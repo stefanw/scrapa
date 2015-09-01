@@ -3,7 +3,7 @@ import json
 from datetime import datetime
 
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime
+from sqlalchemy import Index, Column, Integer, String, Text, Boolean, DateTime
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -13,7 +13,7 @@ Base = declarative_base()
 
 
 class Task(Base):
-    __tablename__ = 'tasks'
+    __tablename__ = 'scrapa_tasks'
 
     id = Column(Integer, primary_key=True)
     scraper_name = Column(String)
@@ -33,6 +33,8 @@ class Task(Base):
         return "<Task(scraper_name='%s', taskid='%s', name='%s')>" % (
                             self.scraper_name, self.task_id, self.name)
 
+Index('scraper_name_task_id', Task.scraper_name, Task.task_id, unique=True)
+
 
 class Result(Base):
     __tablename__ = 'result'
@@ -47,12 +49,15 @@ class Result(Base):
         return "<Result(scraper_name='%s', result_id='%s', kind='%s')>" % (
                             self.scraper_name, self.result_id, self.kind)
 
+Index('scraper_name_result_id_kind', Result.scraper_name,
+                                     Result.result_id, Result.kind, unique=True)
+
 
 class Cache(Base):
     __tablename__ = 'cache'
 
     id = Column(Integer, primary_key=True)
-    cache_id = Column(String)
+    cache_id = Column(String, index=True, unique=True)
     url = Column(String)
     created = Column(DateTime)
     content = Column(String)
@@ -74,22 +79,26 @@ class DatabaseStorage(BaseStorage):
         self.session = Session()
 
     @asyncio.coroutine
-    def create_task(self, scraper_name, coro, args, kwargs):
-        task = Task(
-            scraper_name=scraper_name,
-            task_id=self.get_task_id(coro, args, kwargs),
-            name=coro.__name__,
-            args=json.dumps(args),
-            kwargs=json.dumps(kwargs),
-            created=datetime.now(),
-            tried=0,
-            done=False,
-            failed=False,
-            value=None,
-            exception=None
-        )
-        self.session.add(task)
-        self.session.commit()
+    def store_task(self, scraper_name, coro, args, kwargs):
+        task_id = self.get_task_id(coro, args, kwargs)
+        task_obj = self.session.query(Task
+                ).filter_by(scraper_name=scraper_name, task_id=task_id).first()
+        if not task_obj:
+            task = Task(
+                scraper_name=scraper_name,
+                task_id=task_id,
+                name=coro.__name__,
+                args=json.dumps(args),
+                kwargs=json.dumps(kwargs),
+                created=datetime.now(),
+                tried=0,
+                done=False,
+                failed=False,
+                value=None,
+                exception=None
+            )
+            self.session.add(task)
+            self.session.commit()
 
     @asyncio.coroutine
     def clear_tasks(self, scraper_name):

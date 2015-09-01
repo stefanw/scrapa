@@ -280,7 +280,7 @@ class Scraper(object):
     @asyncio.coroutine
     def store_task(self, coro, args, kwargs):
         storage = yield from self.get_storage()
-        yield from storage.create_task(self.name, coro, args, kwargs)
+        yield from storage.store_task(self.name, coro, args, kwargs)
 
     @asyncio.coroutine
     def store_task_result(self, *args, **kwargs):
@@ -375,7 +375,7 @@ class Scraper(object):
                 return
             self.logger.info('Resuming scraper with %d/%d pending tasks',
                              pending_task_count, task_count)
-            tasks = storage.get_pending_tasks(self.name, self)
+            tasks = yield from storage.get_pending_tasks(self.name, self)
             for task_dict in tasks:
                 yield from self.add_to_queue(
                     task_dict['coro'],

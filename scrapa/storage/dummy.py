@@ -9,7 +9,7 @@ class DummyStorage(BaseStorage):
         pass
 
     @asyncio.coroutine
-    def create_task(self, scraper_name, coro, args, kwargs):
+    def store_task(self, scraper_name, coro, args, kwargs):
         pass
 
     @asyncio.coroutine

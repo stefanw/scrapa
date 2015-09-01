@@ -16,7 +16,7 @@ class BaseStorage(object):
         raise NotImplementedError
 
     @asyncio.coroutine
-    def create_task(self, scraper_name, coro, args, kwargs):
+    def store_task(self, scraper_name, coro, args, kwargs):
         raise NotImplementedError
 
     @asyncio.coroutine
