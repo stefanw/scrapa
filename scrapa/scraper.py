@@ -2,7 +2,7 @@ import argparse
 import asyncio
 from contextlib import contextmanager
 import signal
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit, urlencode, parse_qsl, urlunsplit
 import traceback
 
 import aiohttp
@@ -23,10 +23,12 @@ class Scraper(object):
     HTTP_CONCURENCY_LIMIT = 10
     CONNECT_TIMEOUT = 30
     MAX_RETRIES = 3
+    MAX_TIMEOUT_COUNT = 3
     TASK_RETRY_COUNT = 3
     QUEUE_SIZE = 0
     CONSUMER_COUNT = 10
     REUSE_SESSION = True
+    REUSE_SESSION_COUNT = 50
     STORAGE_ENABLED = True
     DEFAULT_USER_AGENT = 'Scrapa'
     PROXY = None
@@ -45,49 +47,47 @@ class Scraper(object):
         self.queue = asyncio.Queue(self.QUEUE_SIZE)
         self.consumer_count = 0
         self.tasks_running = 0
+        self.timeout_count = 0
         self.proxy = kwargs.get('proxy', self.PROXY)
         self.connector_limit = kwargs.get('connector_limit',
                                           self.CONNECTOR_LIMIT)
         self.http_concurrency_limit = kwargs.get('http_concurrency_limit',
                                                  self.HTTP_CONCURENCY_LIMIT)
         self.http_semaphore = asyncio.Semaphore(self.http_concurrency_limit)
-
-    def get_default_request_kwargs(self):
-        return {
-            'headers': self.get_default_headers()
-        }
-
-    def get_default_headers(self):
-        return {'User-Agent': self.DEFAULT_USER_AGENT}
+        self._session_pool = [None for _ in range(self.http_concurrency_limit)]
+        self._session_query_count = 0
 
     @asyncio.coroutine
     def request(self, method, url, **kwargs):
         url = self.get_full_url(url)
         session_arg = kwargs.pop('session', None)
-        request_kwargs = self.get_default_request_kwargs()
-        request_kwargs.update(kwargs)
         response = None
         for retry_num in range(self.MAX_RETRIES):
             with (yield from self.http_semaphore):
                 with self.use_request_session(session_arg) as session:
-                    self.logger.info('GET %s ? %s DATA: %s',
-                        url,
-                        request_kwargs.get('params', {}),
-                        request_kwargs.get('data', {})
+                    full_url = self.get_full_url(url, params=kwargs.get('params', {}))
+                    self.logger.info('%s %s DATA: %s',
+                        method,
+                        full_url,
+                        kwargs.get('data', {})
                     )
                     try:
                         response = yield from asyncio.wait_for(
-                            session.request(method, url, **request_kwargs),
+                            session.request(method, url, **kwargs),
                             self.CONNECT_TIMEOUT
                         )
                     except asyncio.TimeoutError as e:
                         error_msg = 'Request timed out'
+                        self.timeout_count += 1
+                        if self.timeout_count > self.MAX_TIMEOUT_COUNT:
+                            self.reset_session(session)
                     except aiohttp.ClientError as e:
                         error_msg = 'Request connection error: {}'.format(e)
                     except aiohttp.ServerDisconnectedError as e:
                         error_msg = 'Server disconnected error: {}'.format(e)
                     else:
                         error_msg = None
+                        self.timeout_count = 0
                         break
                 if error_msg is not None:
                     self.logger.error(error_msg)
@@ -108,9 +108,20 @@ class Scraper(object):
             response.close()
             raise HTTPError(http_error_msg, response=self)
 
+    def get_default_session_kwargs(self):
+        return {
+            'headers': self.get_default_session_headers()
+        }
+
+    def get_default_session_headers(self):
+        return {'User-Agent': self.DEFAULT_USER_AGENT}
+
     def create_session(self, **kwargs):
         connector = self.get_connector()
-        return aiohttp.ClientSession(connector=connector, **kwargs)
+        request_kwargs = self.get_default_session_kwargs()
+        request_kwargs.update(kwargs)
+        self.logger.info('Creating new session with %s and %s', connector, request_kwargs)
+        return aiohttp.ClientSession(connector=connector, **request_kwargs)
 
     @contextmanager
     def get_session(self, **kwargs):
@@ -120,18 +131,38 @@ class Scraper(object):
         finally:
             session.close()
 
+    def reset_session(self, session=None):
+        if session is None:
+            self.session.close()
+            self.session = self.create_session()
+        else:
+            session.close()
+
+    def get_session_from_pool(self):
+        pool_size = len(self._session_pool)
+        pool_index = self._session_query_count % pool_size
+        session = self._session_pool[pool_index]
+
+        if session is not None and getattr(session, '_use_count', 0) > self.REUSE_SESSION_COUNT:
+            session.close()
+
+        if session is None or session.closed:
+            self._session_pool[pool_index] = self.create_session()
+            session = self._session_pool[pool_index]
+            session._use_count = 0
+        return session
+
     @contextmanager
     def use_request_session(self, session=None):
-        current_session = session or self.session
+        current_session = session or self.get_session_from_pool()
         try:
-            if current_session is None:
-                self.session = self.create_session()
-                current_session = self.session
             yield current_session
         finally:
-            if session is None and not self.reuse_session:
-                self.session.close()
-                self.session = None
+            self._session_query_count += 1
+            if not hasattr(current_session, '_use_count'):
+                current_session._use_count = 1
+            else:
+                current_session._use_count += 1
 
     def get_connector(self):
         if self.proxy is not None:
@@ -310,17 +341,33 @@ class Scraper(object):
     @asyncio.coroutine
     def progress(self):
         while True:
-            yield from asyncio.sleep(self.PROGRESS_INTERVAL)
             if not self.finished():
                 self.logger.info('Tasks queued: %d, running: %d' % (
                                  self.queue.qsize(), self.tasks_running))
             if self.finished() and self.consumer_count == 0:
                 break
-        self.logger.info('All tasks finished.')
+            yield from asyncio.sleep(self.PROGRESS_INTERVAL)
+        self.logger.info('All tasks finished, cleaning up...')
+        yield from self.clean_up()
 
-    def get_full_url(self, url):
+    @asyncio.coroutine
+    def clean_up(self):
+        for session in self._session_pool:
+            if session is not None and not session.closed:
+                session.close()
+
+    def get_full_url(self, url, params=None):
         if not url.startswith(('http://', 'https://')):
             return urljoin(self.BASE_URL, url)
+        if params is not None:
+            url_parts = urlsplit(url)
+            url_dict = vars(url_parts)
+            qs_list = parse_qsl(url_dict['query'])
+            qs_list += list(params.items())
+            qs_string = urlencode(qs_list)
+            url_dict['query'] = qs_string
+            # url_dict is an OrderedDict, that's why this works
+            url = urlunsplit(url_dict.values())
         return url
 
     def start(self):
@@ -342,6 +389,7 @@ class Scraper(object):
             if self.session is not None:
                 self.session.close()
             loop.close()
+            self.logger.info('Done.')
 
     def run_from_cli(self):
         parser = argparse.ArgumentParser(description='Scrapa arguments.')
