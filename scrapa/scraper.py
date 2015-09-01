@@ -29,6 +29,7 @@ class Scraper(object):
     REUSE_SESSION = True
     STORAGE_ENABLED = True
     DEFAULT_USER_AGENT = 'Scrapa'
+    PROXY = None
 
     def __init__(self, name=None, storage=None, encoding='utf-8', **kwargs):
         self.name = name
@@ -44,6 +45,7 @@ class Scraper(object):
         self.queue = asyncio.Queue(self.QUEUE_SIZE)
         self.consumer_count = 0
         self.tasks_running = 0
+        self.proxy = kwargs.get('proxy', self.PROXY)
         self.connector_limit = kwargs.get('connector_limit',
                                           self.CONNECTOR_LIMIT)
         self.http_concurrency_limit = kwargs.get('http_concurrency_limit',
@@ -132,11 +134,16 @@ class Scraper(object):
                 self.session = None
 
     def get_connector(self):
-        conn = aiohttp.TCPConnector(
-            verify_ssl=False,
-            conn_timeout=self.CONNECT_TIMEOUT,
-            limit=self.connector_limit
-        )
+        if self.proxy is not None:
+            conn = aiohttp.connector.ProxyConnector(
+                proxy=self.proxy, conn_timeout=self.CONNECT_TIMEOUT,
+                limit=self.connector_limit)
+        else:
+            conn = aiohttp.TCPConnector(
+                verify_ssl=False,
+                conn_timeout=self.CONNECT_TIMEOUT,
+                limit=self.connector_limit
+            )
         return conn
 
     @asyncio.coroutine
