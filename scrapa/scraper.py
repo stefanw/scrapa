@@ -38,8 +38,8 @@ class Scraper(object):
         if self.name is None:
             self.name = self.__class__.__name__
 
+        self.stopping = False
         self.encoding = encoding
-        self.session = None
         self.storage = None
         self.storage_obj = storage
         self.reuse_session = self.REUSE_SESSION
@@ -131,12 +131,8 @@ class Scraper(object):
         finally:
             session.close()
 
-    def reset_session(self, session=None):
-        if session is None:
-            self.session.close()
-            self.session = self.create_session()
-        else:
-            session.close()
+    def reset_session(self, session):
+        session.close()
 
     def get_session_from_pool(self):
         pool_size = len(self._session_pool)
@@ -201,7 +197,11 @@ class Scraper(object):
                 yield from self.set_cached_content(cache_id, response.url, text)
             return text
         finally:
-            yield from response.release()
+            try:
+                yield from response.release()
+            except aiohttp.DisconnectedError:
+                # Ignore disconnect errors on release
+                pass
 
     @asyncio.coroutine
     def get_dom(self, *args, **kwargs):
@@ -215,6 +215,8 @@ class Scraper(object):
             self.consumer_count += 1
             while True:
                 try:
+                    if self.finished():
+                        return
                     coro, args, kwargs, meta = self.queue.get_nowait()
                     self.tasks_running += 1
                     try:
@@ -246,6 +248,8 @@ class Scraper(object):
 
     @asyncio.coroutine
     def run_one(self, coro, *args, **kwargs):
+        if not asyncio.iscoroutinefunction(coro):
+            raise Exception('Given task %s is not a coroutine! Decorate it with @scrapa.async', coro)
         result = yield from self.run_task(coro, *args, **kwargs)
         return result
 
@@ -284,6 +288,8 @@ class Scraper(object):
 
     @asyncio.coroutine
     def schedule_one(self, coro, *args, **kwargs):
+        if not asyncio.iscoroutinefunction(coro):
+            raise Exception('Given task %s is not a coroutine! Decorate it with @scrapa.async', coro)
         yield from self.prepare_schedule(coro, args, kwargs)
         yield from self.add_to_queue(coro, args, kwargs)
 
@@ -335,6 +341,11 @@ class Scraper(object):
         yield from storage.set_cached_content(cache_id, url, content)
 
     def finished(self):
+        if self.stopping:
+            return True
+        return self.queue_finished()
+
+    def queue_finished(self):
         qsize = self.queue.qsize()
         return qsize == 0 and self.tasks_running == 0
 
@@ -347,7 +358,10 @@ class Scraper(object):
             if self.finished() and self.consumer_count == 0:
                 break
             yield from asyncio.sleep(self.PROGRESS_INTERVAL)
-        self.logger.info('All tasks finished, cleaning up...')
+        if self.stopping:
+            self.logger.info('Stopping, cleaning up...')
+        else:
+            self.logger.info('All tasks finished, cleaning up...')
         yield from self.clean_up()
 
     @asyncio.coroutine
@@ -386,8 +400,6 @@ class Scraper(object):
                 self.progress()
             ] + consumers))
         finally:
-            if self.session is not None:
-                self.session.close()
             loop.close()
             self.logger.info('Done.')
 
@@ -406,7 +418,6 @@ class Scraper(object):
     def run_start(self, clear=False, clear_cache=False):
         storage = yield from self.get_storage()
         task_count = yield from storage.get_task_count(self.name)
-
         if clear_cache:
             yield from storage.clear_cache()
 
@@ -436,14 +447,17 @@ class Scraper(object):
         loop = asyncio.get_event_loop()
         self.remove_signal_handler(loop)
         try:
-            print('Tasks are still running, do you want to abort? [y, n]')
+            print('Tasks are still running, do you want to stop? [y, n]')
             yes_no = input()
-            if yes_no.lower() == 'n':
-                self.add_signal_handler(loop)
+            self.add_signal_handler(loop)
+            if yes_no.lower() != 'y':
+                self.logger.info('Continue...')
                 return
+            self.logger.info('Stopping down...')
+            self.stopping = True
         except KeyboardInterrupt:
-            pass
-        self.stop()
+            self.logger.info('Force shutdown!')
+            self.stop()
 
     def stop(self):
         loop = asyncio.get_event_loop()
