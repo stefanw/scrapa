@@ -9,7 +9,7 @@ import aiohttp
 from lxml import html
 
 from .logger import make_logger
-from .exceptions import HTTPConnectionError, HTTPError
+from .exceptions import HttpConnectionError, HttpError
 from .utils import args_kwargs_iterator, add_func_to_iterator, get_cache_id
 from .storage.dummy import DummyStorage
 
@@ -92,7 +92,7 @@ class Scraper(object):
                 if error_msg is not None:
                     self.logger.error(error_msg)
         if response is None:
-            raise HTTPConnectionError(error_msg)
+            raise HttpConnectionError(error_msg)
         self.check_status(response, url)
         return response
 
@@ -106,7 +106,7 @@ class Scraper(object):
 
         if http_error_msg:
             response.close()
-            raise HTTPError(http_error_msg, response=self)
+            raise HttpError(http_error_msg, response=self)
 
     def get_default_session_kwargs(self):
         return {

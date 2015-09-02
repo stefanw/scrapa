@@ -1,8 +1,9 @@
-class HTTPError(Exception):
-    def __init__(self, message, response):
-        self.message = message
-        self.response = response
+from aiohttp import HttpProcessingError, DisconnectedError, ClientError
 
 
-class HTTPConnectionError(Exception):
+class HttpError(HttpProcessingError):
+    pass
+
+
+class HttpConnectionError(DisconnectedError, ClientError):
     pass
