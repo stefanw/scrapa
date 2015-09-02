@@ -3,6 +3,7 @@ import json
 from datetime import datetime
 
 from aiopg.sa import create_engine
+import psycopg2
 import sqlalchemy as sa
 from sqlalchemy.schema import CreateTable, CreateIndex
 
@@ -84,21 +85,24 @@ class AsyncPostgresStorage(BaseStorage):
     @asyncio.coroutine
     def store_task(self, scraper_name, coro, args, kwargs):
         task_id = self.get_task_id(coro, args, kwargs)
-
-        with (yield from self.engine) as conn:
-            yield from conn.execute(task_table.insert().values(
-                scraper_name=scraper_name,
-                task_id=task_id,
-                name=coro.__name__,
-                args=json.dumps(args),
-                kwargs=json.dumps(kwargs),
-                created=datetime.now(),
-                tried=0,
-                done=False,
-                failed=False,
-                value=None,
-                exception=None
-            ))
+        try:
+            with (yield from self.engine) as conn:
+                yield from conn.execute(task_table.insert().values(
+                    scraper_name=scraper_name,
+                    task_id=task_id,
+                    name=coro.__name__,
+                    args=json.dumps(args),
+                    kwargs=json.dumps(kwargs),
+                    created=datetime.now(),
+                    tried=0,
+                    done=False,
+                    failed=False,
+                    value=None,
+                    exception=None
+                ))
+        except psycopg2.IntegrityError:
+            # Task already exists
+            pass
 
     @asyncio.coroutine
     def clear_tasks(self, scraper_name):
