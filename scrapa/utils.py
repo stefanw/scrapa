@@ -1,9 +1,58 @@
 import asyncio
-import hashlib
+from datetime import date, datetime
 import functools
+import hashlib
+from itertools import repeat
 import json
 
-from itertools import repeat
+
+class DateTimeDecoder(json.JSONDecoder):
+    def __init__(self, *args, **kargs):
+        super(self, DateTimeDecoder).__init__(
+                object_hook=self.dict_to_object, *args, **kargs)
+
+    def dict_to_object(self, d):
+        if '__type__' not in d:
+            return d
+
+        type = d.pop('__type__')
+        try:
+            dateobj = datetime(**d)
+            return dateobj
+        except:
+            d['__type__'] = type
+            return d
+
+
+class DateTimeEncoder(json.JSONEncoder):
+    """ Instead of letting the default encoder convert datetime to string,
+        convert datetime objects into a dict, which can be decoded by the
+        DateTimeDecoder
+    """
+
+    def default(self, obj):
+        if isinstance(obj, datetime):
+            return {
+                '__type__': 'datetime',
+                'iso': obj.isoformat(),
+                'year': obj.year,
+                'month': obj.month,
+                'day': obj.day,
+                'hour': obj.hour,
+                'minute': obj.minute,
+                'second': obj.second,
+                'microsecond': obj.microsecond,
+            }
+        else:
+            return super(self, DateTimeEncoder).default(obj)
+
+
+def json_dumps(obj):
+    return json.dumps(obj, cls=DateTimeEncoder, indent=2, sort_keys=True)
+
+
+def json_loads(obj):
+    return json.loads(obj, cls=DateTimeDecoder, indent=2, sort_keys=True)
 
 
 def args_kwargs_iterator(iterator):

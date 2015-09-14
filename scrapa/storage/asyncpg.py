@@ -1,5 +1,4 @@
 import asyncio
-import json
 from datetime import datetime
 
 from aiopg.sa import create_engine
@@ -8,6 +7,7 @@ import sqlalchemy as sa
 from sqlalchemy.schema import CreateTable, CreateIndex
 
 from .base import BaseStorage
+from ..utils import json_loads, json_dumps
 
 
 metadata = sa.MetaData()
@@ -91,8 +91,8 @@ class AsyncPostgresStorage(BaseStorage):
                     scraper_name=scraper_name,
                     task_id=task_id,
                     name=coro.__name__,
-                    args=json.dumps(args),
-                    kwargs=json.dumps(kwargs),
+                    args=json_dumps(args),
+                    kwargs=json_dumps(kwargs),
                     created=datetime.now(),
                     tried=0,
                     done=False,
@@ -147,8 +147,8 @@ class AsyncPostgresStorage(BaseStorage):
             )
         return ({
             'coro': getattr(instance, task.name),
-            'args': json.loads(task.args),
-            'kwargs': json.loads(task.kwargs),
+            'args': json_loads(task.args),
+            'kwargs': json_loads(task.kwargs),
             'meta': {'tried': task.tried}
         } for task in result)
 
@@ -164,7 +164,7 @@ class AsyncPostgresStorage(BaseStorage):
                         task_table.c.task_id == task_id
                     )
                 ).values(**{'done': done, 'failed': failed,
-                        'last_tried': datetime.now(), 'value': json.dumps(value),
+                        'last_tried': datetime.now(), 'value': json_dumps(value),
                         'exception': exception, 'tried': task_table.c.tried + 1})
             )
 
@@ -183,7 +183,7 @@ class AsyncPostgresStorage(BaseStorage):
             )
             if result_obj.rowcount > 0:
                 result_obj = list(result_obj)[0]
-                result_value = json.loads(result_obj.result)
+                result_value = json_loads(result_obj.result)
                 if isinstance(result_value, dict) and isinstance(result, dict):
                     result_value.update(result)
                 else:
@@ -191,14 +191,14 @@ class AsyncPostgresStorage(BaseStorage):
                 yield from conn.execute(
                     result_table.update().where(
                         query
-                    ).values(result=json.dumps(result_value))
+                    ).values(result=json_dumps(result_value))
                 )
             else:
                 yield from conn.execute(result_table.insert().values(
                     scraper_name=scraper_name,
                     kind=kind,
                     result_id=result_id,
-                    result=json.dumps(result)
+                    result=json_dumps(result)
                 ))
 
     @asyncio.coroutine
