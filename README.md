@@ -7,6 +7,7 @@ A scraping library on top of Python 3 `asyncio` and `aiohttp`.
 
 
 ```python
+# example.py
 from itertools import chain
 
 from scrapa import Scraper, async
@@ -27,8 +28,9 @@ class MyScraper(Scraper):
         # Chain the generators in these sets to make one generator
         page_link_sets = chain.from_iterable(page_link_sets)
         # Schedule tasks to get all images from these pages
-        # Scheduled tasks are put in a queue and do not block until done
+        # Scheduled tasks are put in a queue without blocking
         yield from self.schedule_many(self.get_images, page_link_sets)
+        # This returns immediately and the queue is processed in the event loop
         print('DONE')
 
     @async
@@ -58,3 +60,16 @@ if __name__ == '__main__':
     main()
 
 ```
+
+Save this to a file and Run it like this with python >= 3.4:
+
+    python example.py scrape
+
+
+Dump pending tasks and split to 3 files:
+
+    python example.py dump_tasks -s 3
+
+Load tasks from dump file:
+
+    python example.py load_tasks -f scrapa-001.json
