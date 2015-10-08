@@ -47,8 +47,8 @@ class DateTimeEncoder(json.JSONEncoder):
             return super(DateTimeEncoder, self).default(obj)
 
 
-def json_dumps(obj):
-    return json.dumps(obj, cls=DateTimeEncoder, indent=2, sort_keys=True)
+def json_dumps(obj, indent=2):
+    return json.dumps(obj, cls=DateTimeEncoder, indent=indent, sort_keys=True)
 
 
 def json_loads(obj):
