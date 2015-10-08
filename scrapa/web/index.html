@@ -1,0 +1,187 @@
+<!doctype html>
+<!--[if lt IE 7]>      <html class="no-js lt-ie9 lt-ie8 lt-ie7"> <![endif]-->
+<!--[if IE 7]>         <html class="no-js lt-ie9 lt-ie8"> <![endif]-->
+<!--[if IE 8]>         <html class="no-js lt-ie9"> <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js"> <!--<![endif]-->
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>Scrapa Dashboard</title>
+    <meta name="description" content="">
+    <meta name="viewport" content="width=device-width">
+    <style type="text/css">
+    .chart {
+    	shape-rendering: crispEdges;
+    }
+
+    .mini text {
+    	font: 9px sans-serif;
+    }
+
+    .main text {
+    	font: 12px sans-serif;
+    }
+
+    .month text {
+    	text-anchor: start;
+    }
+
+    .todayLine {
+    	stroke: blue;
+    	stroke-width: 1.5;
+    }
+
+    .axis line, .axis path {
+    	stroke: black;
+    }
+
+    .miniItem {
+    	stroke-width: 6;
+    }
+
+    .status- {
+    	stroke: gray;
+    	fill: #ddd;
+    }
+
+    .status-200 {
+    	stroke: green;
+    	fill: lightgreen;
+    }
+    .status-500 {
+    	stroke: black;
+    	fill: black;
+    }
+    .status-404 {
+    	stroke: red;
+    	fill: red;
+    }
+
+    .brush .extent {
+    	stroke: gray;
+    	fill: blue;
+    	fill-opacity: .165;
+    }
+    </style>
+</head>
+<body>
+<!--[if lt IE 9]>
+<p class="browsehappy">You are using an <strong>outdated</strong> browser. Please <a href="http://browsehappy.com/">upgrade your browser</a> to improve your experience.</p>
+<![endif]-->
+
+<div id="swimlane"></div>
+
+<div id="output"></div>
+
+<script src="static/vendor/jquery/dist/jquery.min.js"></script>
+<script src="/static/vendor/d3/d3.js" charset="utf-8"></script>
+<script src="/static/js/d3-swimlanes.js" charset="utf-8"></script>
+
+<script>
+
+$(function(){
+
+  var margin = {top: 20, right: 15, bottom: 15, left: 60};
+
+  var config = {
+    margin: margin,
+  };
+
+  var swimlaneDiv = document.getElementById('swimlane');
+
+  var width = 960;
+  var height = 800;
+
+  var swimlane = swimlaneChart().width(800);
+  var chart;
+
+  function updateRequestChart(data) {
+    if (chart === undefined) {
+      chart = d3.select('#swimlane')
+        .datum(data).call(swimlane);
+    }
+    chart.datum(data).call(swimlane.update);
+  }
+
+  var laneDict = {};
+  var lanes = [];
+  var requests = [];
+
+  function onMessage(e) {
+    var evt = JSON.parse(e.data);
+    if (evt.type === 'request') {
+      var sesid = evt.data.session_id;
+      var requestLane;
+      if (laneDict[sesid] === undefined) {
+        laneDict[sesid] = lanes.length;
+        requestLane = {
+          id: lanes.length,
+          label: sesid
+        };
+        lanes.push(requestLane);
+      } else {
+        requestLane = lanes[laneDict[sesid]];
+      }
+      var req = evt.data;
+      var start = Date.parse(evt.data.timestamp.iso);
+      req.start = new Date(start);
+      req.end = new Date(start + evt.data.duration);
+      req.name = req.status;
+      req.desc = req.url;
+      req.id = requests.length;
+      req.lane = laneDict[sesid];
+      req['class'] = 'status-' + req.status;
+
+      // requestLane.dates.push(new Date(start));
+      // requestLane.dates.push(new Date(end));
+      requests.push(req);
+      updateRequestChart({
+        lanes: lanes,
+        items: requests
+      });
+    } else {
+      console.log(evt.data);
+    }
+  }
+
+
+  var output = document.getElementById("output");
+  var websocket;
+
+  function onOpen(evt) {
+    writeToScreen("CONNECTED");
+    doSend("WebSocket rocks");
+  }
+  function onClose(evt) {
+    writeToScreen("DISCONNECTED");
+  }
+  function onError(evt) {
+    writeToScreen('<span style="color: red;">ERROR:</span> ' + evt.data);
+  }
+  function doSend(message) {
+    writeToScreen("SENT: " + message);
+    websocket.send(message);
+  }
+  function writeToScreen(message) {
+    var pre = document.createElement("p");
+    pre.style.wordWrap = "break-word";
+    pre.innerHTML = message;
+    output.appendChild(pre);
+  }
+
+  function initConnection(){
+    var wsUri = "ws://" + window.location.hostname + (location.port ? ':' + location.port : '') + '/ws';
+    websocket = new WebSocket(wsUri);
+    websocket.onopen = function(evt) { onOpen(evt); };
+    websocket.onclose = function(evt) { onClose(evt); };
+    websocket.onmessage = function(evt) { onMessage(evt); };
+    websocket.onerror = function(evt) { onError(evt); };
+  }
+  initConnection();
+
+});
+
+</script>
+
+</body>
+</html>

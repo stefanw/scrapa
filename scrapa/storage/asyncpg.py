@@ -12,7 +12,7 @@ from ..utils import json_loads, json_dumps
 
 metadata = sa.MetaData()
 
-task_table = sa.Table('scrapa_tasks', metadata,
+task_table = sa.Table('scrapa_task', metadata,
     sa.Column('id', sa.Integer, primary_key=True),
     sa.Column('scraper_name', sa.String(255)),
     sa.Column('task_id', sa.String(255)),
@@ -28,12 +28,12 @@ task_table = sa.Table('scrapa_tasks', metadata,
     sa.Column('exception', sa.Text, nullable=True),
 )
 
-task_index = sa.Index('scrapa_tasks__scraper_name_task_id', task_table.c.scraper_name, task_table.c.task_id, unique=True)
+task_index = sa.Index('scrapa_task__scraper_name_task_id', task_table.c.scraper_name, task_table.c.task_id, unique=True)
 
 result_table = sa.Table('scrapa_result', metadata,
     sa.Column('id', sa.Integer, primary_key=True),
     sa.Column('scraper_name', sa.String(255)),
-    sa.Column('result_id', sa.String(255)),
+    sa.Column('result_id', sa.String(1024)),
     sa.Column('kind', sa.String(255)),
     sa.Column('result', sa.Text),
 )
@@ -100,9 +100,10 @@ class AsyncPostgresStorage(BaseStorage):
                     value=None,
                     exception=None
                 ))
+                return True
         except psycopg2.IntegrityError:
             # Task already exists
-            pass
+            return False
 
     @asyncio.coroutine
     def clear_tasks(self, scraper_name):
@@ -135,7 +136,7 @@ class AsyncPostgresStorage(BaseStorage):
         return count
 
     @asyncio.coroutine
-    def get_pending_tasks(self, scraper_name, instance):
+    def get_pending_tasks(self, scraper_name):
         with (yield from self.engine) as conn:
             result = yield from conn.execute(
                 task_table.select().where(
@@ -146,7 +147,7 @@ class AsyncPostgresStorage(BaseStorage):
                 )
             )
         return ({
-            'coro': getattr(instance, task.name),
+            'task_name': task.name,
             'args': json_loads(task.args),
             'kwargs': json_loads(task.kwargs),
             'meta': {'tried': task.tried}

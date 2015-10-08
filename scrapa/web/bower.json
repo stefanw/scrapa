@@ -1,0 +1,25 @@
+{
+  "name": "scrapa",
+  "version": "0.0.0",
+  "homepage": "https://github.com/stefanw/scrapa",
+  "authors": [
+    "Stefan Wehrmeyer <mail@stefanwehrmeyer.com>"
+  ],
+  "moduleType": [
+    "amd"
+  ],
+  "license": "MIT",
+  "ignore": [
+    "**/.*",
+    "node_modules",
+    "bower_components",
+    "static/vendor/",
+    "test",
+    "tests"
+  ],
+  "dependencies": {
+    "EventDrops": "event-drops#~0.1.2",
+    "lodash": "~3.10.1",
+    "malhar-angular-dashboard": "~1.0.1"
+  }
+}

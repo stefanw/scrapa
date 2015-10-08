@@ -1,5 +1,5 @@
 import asyncio
-from datetime import date, datetime
+from datetime import datetime
 import functools
 import hashlib
 from itertools import repeat
@@ -8,7 +8,7 @@ import json
 
 class DateTimeDecoder(json.JSONDecoder):
     def __init__(self, *args, **kargs):
-        super(self, DateTimeDecoder).__init__(
+        super(DateTimeDecoder, self).__init__(
                 object_hook=self.dict_to_object, *args, **kargs)
 
     def dict_to_object(self, d):
@@ -44,7 +44,7 @@ class DateTimeEncoder(json.JSONEncoder):
                 'microsecond': obj.microsecond,
             }
         else:
-            return super(self, DateTimeEncoder).default(obj)
+            return super(DateTimeEncoder, self).default(obj)
 
 
 def json_dumps(obj):
@@ -52,7 +52,7 @@ def json_dumps(obj):
 
 
 def json_loads(obj):
-    return json.loads(obj, cls=DateTimeDecoder, indent=2, sort_keys=True)
+    return json.loads(obj, cls=DateTimeDecoder)
 
 
 def args_kwargs_iterator(iterator):

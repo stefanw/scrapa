@@ -1,85 +1,83 @@
 import argparse
 import asyncio
 from contextlib import contextmanager
+import csv
+from datetime import datetime
+import json
+import math
 import signal
-from urllib.parse import urljoin, urlsplit, urlencode, parse_qsl, urlunsplit
 import traceback
+from urllib.parse import urljoin, urlsplit, urlencode, parse_qsl, urlunsplit
+import uuid
 
 import aiohttp
 from lxml import html
 
-from .logger import make_logger
+from .logger import make_logger, add_websocket_handler
 from .exceptions import HttpConnectionError, HttpError
-from .utils import args_kwargs_iterator, add_func_to_iterator, get_cache_id
-from .storage.dummy import DummyStorage
+from .utils import (args_kwargs_iterator, add_func_to_iterator, get_cache_id,
+                    json_dumps)
+from .config import ScrapaConfig, DefaultValue
 
 if not hasattr(asyncio, 'ensure_future'):
     asyncio.ensure_future = asyncio.async
 
 
 class Scraper(object):
-    PROGRESS_INTERVAL = 5
-    CONNECTOR_LIMIT = 10
-    HTTP_CONCURENCY_LIMIT = 10
-    CONNECT_TIMEOUT = 30
-    MAX_RETRIES = 3
-    MAX_TIMEOUT_COUNT = 3
-    TASK_RETRY_COUNT = 3
-    QUEUE_SIZE = 0
-    CONSUMER_COUNT = 10
-    REUSE_SESSION = True
-    REUSE_SESSION_COUNT = 50
-    STORAGE_ENABLED = True
-    DEFAULT_USER_AGENT = 'Scrapa'
-    PROXY = None
+    def __init__(self, **kwargs):
+        self.config_kwargs = kwargs
 
-    def __init__(self, name=None, storage=None, encoding='utf-8', **kwargs):
-        self.name = name
-        if self.name is None:
-            self.name = self.__class__.__name__
+    def init_configuration(self, config):
+        proper_config = {}
+        for key in (k for k in dir(ScrapaConfig) if not k.startswith('_')):
+            val = config.get(key.lower(),
+                    self.config_kwargs.get(key.lower(),
+                        getattr(self, key, getattr(ScrapaConfig, key))
+                    )
+            )
+            if isinstance(val, DefaultValue):
+                val = val.get(self)
+            proper_config[key] = val
+
+        self.config = type('CustomScrapaConfig', (ScrapaConfig,), proper_config)
 
         self.stopping = False
-        self.encoding = encoding
-        self.storage = None
-        self.storage_obj = storage
-        self.reuse_session = self.REUSE_SESSION
-        self.logger = make_logger(self.name)
-        self.queue = asyncio.Queue(self.QUEUE_SIZE)
         self.consumer_count = 0
         self.tasks_running = 0
         self.timeout_count = 0
-        self.proxy = kwargs.get('proxy', self.PROXY)
-        self.connector_limit = kwargs.get('connector_limit',
-                                          self.CONNECTOR_LIMIT)
-        self.http_concurrency_limit = kwargs.get('http_concurrency_limit',
-                                                 self.HTTP_CONCURENCY_LIMIT)
-        self.http_semaphore = asyncio.Semaphore(self.http_concurrency_limit)
-        self._session_pool = [None for _ in range(self.http_concurrency_limit)]
+        self.storage = None
+        self.logger = make_logger(self.config.NAME)
+
+        self.queue = asyncio.Queue(self.config.QUEUE_SIZE)
+        self.http_semaphore = asyncio.Semaphore(self.config.HTTP_CONCURENCY_LIMIT)
+        self._session_pool = [None for _ in range(self.config.HTTP_CONCURENCY_LIMIT)]
         self._session_query_count = 0
 
     @asyncio.coroutine
     def request(self, method, url, **kwargs):
         url = self.get_full_url(url)
         session_arg = kwargs.pop('session', None)
+        status_only = kwargs.pop('status_only', False)
+        raise_for_status = kwargs.pop('raise_for_status', True)
         response = None
-        for retry_num in range(self.MAX_RETRIES):
+        error_msg = None
+        req_uuid = str(uuid.uuid4())
+        for retry_num in range(self.config.MAX_RETRIES):
             with (yield from self.http_semaphore):
                 with self.use_request_session(session_arg) as session:
                     full_url = self.get_full_url(url, params=kwargs.get('params', {}))
-                    self.logger.info('%s %s DATA: %s',
-                        method,
-                        full_url,
-                        kwargs.get('data', {})
-                    )
                     try:
+                        start_time = datetime.utcnow()
                         response = yield from asyncio.wait_for(
                             session.request(method, url, **kwargs),
-                            self.CONNECT_TIMEOUT
+                            self.config.CONNECT_TIMEOUT
                         )
+                        if not status_only:
+                            yield from response.read()
                     except asyncio.TimeoutError as e:
                         error_msg = 'Request timed out'
                         self.timeout_count += 1
-                        if self.timeout_count > self.MAX_TIMEOUT_COUNT:
+                        if self.timeout_count > self.config.MAX_TIMEOUT_COUNT:
                             self.reset_session(session)
                     except aiohttp.ClientError as e:
                         error_msg = 'Request connection error: {}'.format(e)
@@ -89,11 +87,32 @@ class Scraper(object):
                         error_msg = None
                         self.timeout_count = 0
                         break
-                if error_msg is not None:
-                    self.logger.error(error_msg)
+                    finally:
+                        self.log_request({
+                            'req_uuid': req_uuid,
+                            'method': method,
+                            'kwargs': kwargs,
+                            'session_id': id(session),
+                            'url': full_url,
+                            'status': response.status if response else None,
+                            'retry': retry_num,
+                            'message': error_msg,
+                            'timestamp': start_time,
+                            'duration': int((datetime.utcnow() - start_time).total_seconds() * 1000)
+                        })
+                        try:
+                            if response is not None:
+                                yield from response.release()
+                        except (aiohttp.DisconnectedError, RuntimeError):
+                            # Ignore disconnect errors on release
+                            # Ignore pause_reading errors
+                            pass
+            if error_msg is not None:
+                self.logger.warn(error_msg)
         if response is None:
             raise HttpConnectionError(error_msg)
-        self.check_status(response, url)
+        if raise_for_status:
+            self.check_status(response, url)
         return response
 
     def check_status(self, response, url):
@@ -106,7 +125,7 @@ class Scraper(object):
 
         if http_error_msg:
             response.close()
-            raise HttpError(http_error_msg, response=self)
+            raise HttpError(code=response.status, message=http_error_msg, headers=response.headers)
 
     def get_default_session_kwargs(self):
         return {
@@ -114,13 +133,13 @@ class Scraper(object):
         }
 
     def get_default_session_headers(self):
-        return {'User-Agent': self.DEFAULT_USER_AGENT}
+        return {'User-Agent': self.config.DEFAULT_USER_AGENT}
 
     def create_session(self, **kwargs):
         connector = self.get_connector()
         request_kwargs = self.get_default_session_kwargs()
         request_kwargs.update(kwargs)
-        self.logger.info('Creating new session with %s and %s', connector, request_kwargs)
+        self.logger.debug('Creating new session with %s and %s', connector, request_kwargs)
         return aiohttp.ClientSession(connector=connector, **request_kwargs)
 
     @contextmanager
@@ -139,7 +158,7 @@ class Scraper(object):
         pool_index = self._session_query_count % pool_size
         session = self._session_pool[pool_index]
 
-        if session is not None and getattr(session, '_use_count', 0) > self.REUSE_SESSION_COUNT:
+        if session is not None and getattr(session, '_use_count', 0) > self.config.REUSE_SESSION_COUNT:
             session.close()
 
         if session is None or session.closed:
@@ -161,15 +180,16 @@ class Scraper(object):
                 current_session._use_count += 1
 
     def get_connector(self):
-        if self.proxy is not None:
+        if self.config.PROXY is not None:
             conn = aiohttp.connector.ProxyConnector(
-                proxy=self.proxy, conn_timeout=self.CONNECT_TIMEOUT,
-                limit=self.connector_limit)
+                proxy=self.config.PROXY,
+                conn_timeout=self.config.CONNECT_TIMEOUT,
+                limit=self.config.CONNECTOR_LIMIT)
         else:
             conn = aiohttp.TCPConnector(
                 verify_ssl=False,
-                conn_timeout=self.CONNECT_TIMEOUT,
-                limit=self.connector_limit
+                conn_timeout=self.config.CONNECT_TIMEOUT,
+                limit=self.config.CONNECTOR_LIMIT
             )
         return conn
 
@@ -179,29 +199,26 @@ class Scraper(object):
         return response
 
     @asyncio.coroutine
-    def get_text(self, url, *args, **kwargs):
+    def get_text(self, url='', *args, **kwargs):
+        response = None
         url = self.get_full_url(url)
+        encoding = kwargs.pop('encoding', self.config.ENCODING)
         cache = kwargs.pop('cache', False)
         if cache:
             cache_id = get_cache_id(url, *args, **kwargs)
             cached_result = yield from self.get_cached_content(cache_id)
             if cached_result is not None:
                 return cached_result
-
-        encoding = kwargs.pop('encoding', self.encoding)
-
         response = yield from self.get(url, *args, **kwargs)
-        try:
-            text = yield from response.text(encoding=encoding)
-            if cache:
-                yield from self.set_cached_content(cache_id, response.url, text)
-            return text
-        finally:
-            try:
-                yield from response.release()
-            except aiohttp.DisconnectedError:
-                # Ignore disconnect errors on release
-                pass
+        text = yield from response.text(encoding=encoding)
+        if cache:
+            yield from self.set_cached_content(cache_id, response.url, text)
+        return text
+
+    @asyncio.coroutine
+    def get_json(self, *args, **kwargs):
+        text = yield from self.get_text(*args, **kwargs)
+        return json.loads(text)
 
     @asyncio.coroutine
     def get_dom(self, *args, **kwargs):
@@ -223,7 +240,7 @@ class Scraper(object):
                         yield from self.run_task(coro, *args, **kwargs)
                     except Exception:
                         if self.storage_enabled(coro):
-                            if meta is not None and meta.get('tried') < self.TASK_RETRY_COUNT:
+                            if meta is not None and meta.get('tried') < self.config.TASK_RETRY_COUNT:
                                 yield from self.add_to_queue(coro, args, kwargs, meta)
                     finally:
                         self.tasks_running -= 1
@@ -260,6 +277,7 @@ class Scraper(object):
         value = None
         exception = None
         try:
+            self.tasks_running += 1
             result = (yield from coro(*args, **kwargs))
         except Exception as e:
             self.logger.exception(e)
@@ -271,9 +289,10 @@ class Scraper(object):
             done = True
             return result
         finally:
+            self.tasks_running -= 1
             if self.storage_enabled(coro):
                 yield from self.store_task_result(
-                    self.name,
+                    self.config.NAME,
                     coro, args, kwargs,
                     done, failed,
                     value, exception
@@ -290,8 +309,9 @@ class Scraper(object):
     def schedule_one(self, coro, *args, **kwargs):
         if not asyncio.iscoroutinefunction(coro):
             raise Exception('Given task %s is not a coroutine! Decorate it with @scrapa.async', coro)
-        yield from self.prepare_schedule(coro, args, kwargs)
-        yield from self.add_to_queue(coro, args, kwargs)
+        should_run = yield from self.prepare_schedule(coro, args, kwargs)
+        if should_run:
+            yield from self.add_to_queue(coro, args, kwargs)
 
     @asyncio.coroutine
     def add_to_queue(self, coro, args, kwargs, meta=None):
@@ -299,25 +319,26 @@ class Scraper(object):
 
     @asyncio.coroutine
     def prepare_schedule(self, coro, args, kwargs):
+        should_run = True
         if self.storage_enabled(coro):
-            yield from self.store_task(coro, args, kwargs)
+            should_run = yield from self.store_task(coro, args, kwargs)
+        return should_run
 
     @asyncio.coroutine
     def get_storage(self):
         if self.storage is None:
-            if self.storage_obj is None:
-                self.storage_obj = DummyStorage()
-            self.storage = self.storage_obj
+            self.storage = self.config.STORAGE
             yield from self.storage.create()
         return self.storage
 
     def storage_enabled(self, coro):
-        return getattr(coro, 'scrapa_store', False) and self.STORAGE_ENABLED
+        return getattr(coro, 'scrapa_store', False) and self.config.STORAGE_ENABLED
 
     @asyncio.coroutine
     def store_task(self, coro, args, kwargs):
         storage = yield from self.get_storage()
-        yield from storage.store_task(self.name, coro, args, kwargs)
+        should_run = yield from storage.store_task(self.config.NAME, coro, args, kwargs)
+        return should_run
 
     @asyncio.coroutine
     def store_task_result(self, *args, **kwargs):
@@ -327,7 +348,7 @@ class Scraper(object):
     @asyncio.coroutine
     def store_result(self, result_id, kind, result):
         storage = yield from self.get_storage()
-        yield from storage.store_result(self.name, result_id, kind, result)
+        yield from storage.store_result(self.config.NAME, result_id, kind, result)
 
     @asyncio.coroutine
     def get_cached_content(self, cache_id):
@@ -355,9 +376,14 @@ class Scraper(object):
             if not self.finished():
                 self.logger.info('Tasks queued: %d, running: %d' % (
                                  self.queue.qsize(), self.tasks_running))
+                self.log_progress({
+                    'queue_size': self.queue.qsize(),
+                    'task_count': self.tasks_running,
+                    'consumer_count': self.consumer_count
+                })
             if self.finished() and self.consumer_count == 0:
                 break
-            yield from asyncio.sleep(self.PROGRESS_INTERVAL)
+            yield from asyncio.sleep(self.config.PROGRESS_INTERVAL)
         if self.stopping:
             self.logger.info('Stopping, cleaning up...')
         else:
@@ -369,10 +395,13 @@ class Scraper(object):
         for session in self._session_pool:
             if session is not None and not session.closed:
                 session.close()
+        if self.config.ENABLE_WEBSERVER:
+            yield from self.websocket_handler.close_server()
+        return None
 
     def get_full_url(self, url, params=None):
-        if not url.startswith(('http://', 'https://')):
-            return urljoin(self.BASE_URL, url)
+        if self.config.BASE_URL and not url.startswith(('http://', 'https://')):
+            return urljoin(self.config.BASE_URL, url)
         if params is not None:
             url_parts = urlsplit(url)
             url_dict = vars(url_parts)
@@ -387,61 +416,130 @@ class Scraper(object):
     def start(self):
         raise NotImplementedError
 
-    def run(self, clear=False, clear_cache=False):
+    def run_from_cli(self):
+        parser = argparse.ArgumentParser(description='Scrapa arguments.')
+
+        subparsers = parser.add_subparsers(dest="command_name")
+
+        scraper = subparsers.add_parser('scrape')
+        scraper.add_argument('--clear', dest='clear', action='store_true',
+                           default=False,
+                           help='Clear all stored tasks for this scraper')
+        scraper.add_argument('--start', dest='start', action='store_true',
+                           default=False,
+                           help='Clear all stored tasks for this scraper')
+        scraper.add_argument('--clear-cache', dest='clear_cache',
+                            action='store_true',
+                            default=False,
+                            help='Clear the http cache')
+
+        split_tasks = subparsers.add_parser('dump_tasks')
+        split_tasks.add_argument('-s', '--split', default=1, type=int)
+        split_tasks.add_argument('-o', '--output')
+        load_tasks = subparsers.add_parser('load_tasks')
+        load_tasks.add_argument('-f', '--filename')
+
+        args = parser.parse_args()
+        args = vars(args)
+
+        self.init_configuration(args)
+
+        command = args.get('command_name')
+        if command is not None:
+            getattr(self, command)(**args)
+        else:
+            args = scraper.parse_args()
+            self.scrape(**vars(args))
+
+    def scrape(self, **kwargs):
         loop = asyncio.get_event_loop()
 
         self.add_signal_handler(loop)
 
-        consumers = [self.consume_queue() for _ in range(self.CONSUMER_COUNT)]
         try:
-            loop.run_until_complete(asyncio.wait([
-                self.schedule_one(self.run_start, clear=clear,
-                                                  clear_cache=clear_cache),
-                self.progress()
-            ] + consumers))
+            loop.run_until_complete(self.check_start(**kwargs))
         finally:
             loop.close()
             self.logger.info('Done.')
 
-    def run_from_cli(self):
-        parser = argparse.ArgumentParser(description='Scrapa arguments.')
-        parser.add_argument('--clear', dest='clear', action='store_true',
-                           default=False,
-                           help='Clear all stored tasks for this scraper')
-        parser.add_argument('--clear-cache', dest='clear_cache', action='store_true',
-                           default=False,
-                           help='Clear the http cache')
-        args = parser.parse_args()
-        self.run(**vars(args))
+    def dump_tasks(self, split=1, output=None):
+        if output is None:
+            output = 'scrapa-'
+
+        loop = asyncio.get_event_loop()
+        storage = loop.run_until_complete(self.get_storage())
+        total_count = loop.run_until_complete(storage.get_pending_task_count())
+        tasks = loop.run_until_complete(storage.get_pending_tasks(self.config.NAME))
+
+        FIELDS = ('scraper_name', 'task_name', 'args', 'kwargs', 'meta')
+
+        tasks_per_file = math.ceil(total_count / split)
+        task_counter = 0
+        outfile = None
+        file_counter = 0
+        for task_dict in tasks:
+            if outfile is None:
+                file_counter += 1
+                filename = '{}{:03d}.csv'.format(output, file_counter)
+                outfile = csv.DictWriter(filename, FIELDS)
+                outfile.writeheader()
+            outfile.writerow({
+                'scraper_name': self.config.NAME,
+                'task_name': task_dict['task_name'],
+                'args': json_dumps(task_dict['args']),
+                'kwargs': json_dumps(task_dict['kwargs']),
+                'meta': json_dumps(task_dict['kwargs'])
+            })
+            task_counter += 1
+            if task_counter > tasks_per_file:
+                outfile.close()
+                outfile = None
 
     @asyncio.coroutine
-    def run_start(self, clear=False, clear_cache=False):
+    def check_start(self, start=False, clear=False, clear_cache=False, **kwargs):
         storage = yield from self.get_storage()
-        task_count = yield from storage.get_task_count(self.name)
+        task_count = yield from storage.get_task_count(self.config.NAME)
         if clear_cache:
             yield from storage.clear_cache()
 
-        if clear or task_count == 0:
-            if task_count > 0:
+        start_coro = None
+        if start or clear or task_count == 0:
+            if clear and task_count > 0:
                 self.logger.info('Deleting %s tasks...', task_count)
-                yield from storage.clear_tasks(self.name)
+                yield from storage.clear_tasks(self.config.NAME)
             self.logger.info('Starting scraper from scratch')
-            yield from self.start()
+            start_coro = self.start
         else:
-            pending_task_count = yield from storage.get_pending_task_count(self.name)
+            pending_task_count = yield from storage.get_pending_task_count(self.config.NAME)
             if pending_task_count == 0:
                 self.logger.info('All %d tasks are complete.', task_count)
                 return
             self.logger.info('Resuming scraper with %d/%d pending tasks',
                              pending_task_count, task_count)
-            tasks = yield from storage.get_pending_tasks(self.name, self)
+            tasks = yield from storage.get_pending_tasks(self.config.NAME)
             for task_dict in tasks:
                 yield from self.add_to_queue(
-                    task_dict['coro'],
+                    getattr(self, task_dict['task_name']),
                     task_dict['args'],
                     task_dict['kwargs'],
                     meta=task_dict['meta']
                 )
+        yield from self.run_start(start_coro=start_coro)
+
+    @asyncio.coroutine
+    def run_start(self, start_coro=None):
+        if self.config.ENABLE_WEBSERVER:
+            self.websocket_handler = yield from add_websocket_handler(self.logger)
+
+        consumers = []
+        if self.config.ENABLE_QUEUE:
+            consumers = [self.consume_queue() for _ in range(self.config.CONSUMER_COUNT)]
+
+        start = []
+        if start_coro is not None:
+            start = [self.run_task(start_coro)]
+
+        yield from asyncio.wait([self.progress()] + start + consumers)
 
     def interrupt(self):
         loop = asyncio.get_event_loop()
@@ -453,7 +551,7 @@ class Scraper(object):
             if yes_no.lower() != 'y':
                 self.logger.info('Continue...')
                 return
-            self.logger.info('Stopping down...')
+            self.logger.info('Stopping...')
             self.stopping = True
         except KeyboardInterrupt:
             self.logger.info('Force shutdown!')
@@ -470,3 +568,17 @@ class Scraper(object):
     def remove_signal_handler(self, loop):
         for signame in ('SIGINT',):
             loop.remove_signal_handler(getattr(signal, signame))
+
+    def log_request(self, info):
+        self.logger.debug('request', extra={'scrapa': {
+            'scraper': self.config.NAME,
+            'type': 'request',
+            'data': info
+        }})
+
+    def log_progress(self, info):
+        self.logger.debug('progress', extra={'scrapa': {
+            'scraper': self.config.NAME,
+            'type': 'progress',
+            'data': info
+        }})

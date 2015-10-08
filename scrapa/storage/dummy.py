@@ -10,7 +10,7 @@ class DummyStorage(BaseStorage):
 
     @asyncio.coroutine
     def store_task(self, scraper_name, coro, args, kwargs):
-        pass
+        return True
 
     @asyncio.coroutine
     def clear_tasks(self, scraper_name):
@@ -25,13 +25,13 @@ class DummyStorage(BaseStorage):
         return 0
 
     @asyncio.coroutine
-    def get_pending_tasks(self, scraper_name, instance):
+    def get_pending_tasks(self, scraper_name):
         return []
 
     @asyncio.coroutine
     def store_task_result(self, scraper_name, coro, args, kwargs, done, failed,
                           value, exception):
-        pass
+        return False
 
     @asyncio.coroutine
     def store_result(self, scraper_name, result_id, kind, result):

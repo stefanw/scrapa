@@ -17,6 +17,7 @@ class BaseStorage(object):
 
     @asyncio.coroutine
     def store_task(self, scraper_name, coro, args, kwargs):
+        ''' Return True if stored, False if already stored'''
         raise NotImplementedError
 
     @asyncio.coroutine
@@ -32,7 +33,7 @@ class BaseStorage(object):
         raise NotImplementedError
 
     @asyncio.coroutine
-    def get_pending_tasks(self, scraper_name, instance):
+    def get_pending_tasks(self, scraper_name):
         raise NotImplementedError
 
     @asyncio.coroutine

@@ -13,7 +13,7 @@ Base = declarative_base()
 
 
 class Task(Base):
-    __tablename__ = 'scrapa_tasks'
+    __tablename__ = 'scrapa_task'
 
     id = Column(Integer, primary_key=True)
     scraper_name = Column(String)
@@ -37,7 +37,7 @@ Index('scraper_name_task_id', Task.scraper_name, Task.task_id, unique=True)
 
 
 class Result(Base):
-    __tablename__ = 'result'
+    __tablename__ = 'scrapa_result'
 
     id = Column(Integer, primary_key=True)
     scraper_name = Column(String)
@@ -54,7 +54,7 @@ Index('scraper_name_result_id_kind', Result.scraper_name,
 
 
 class Cache(Base):
-    __tablename__ = 'cache'
+    __tablename__ = 'scrapa_cache'
 
     id = Column(Integer, primary_key=True)
     cache_id = Column(String, index=True, unique=True)
@@ -99,6 +99,8 @@ class DatabaseStorage(BaseStorage):
             )
             self.session.add(task)
             self.session.commit()
+            return True
+        return False
 
     @asyncio.coroutine
     def clear_tasks(self, scraper_name):
@@ -115,10 +117,10 @@ class DatabaseStorage(BaseStorage):
                 scraper_name=scraper_name, done=False).count()
 
     @asyncio.coroutine
-    def get_pending_tasks(self, scraper_name, instance):
+    def get_pending_tasks(self, scraper_name):
         result = self.session.query(Task).filter_by(scraper_name=scraper_name, done=False)
         return ({
-            'coro': getattr(instance, task.name),
+            'coro': task.name,
             'args': json_loads(task.args),
             'kwargs': json_loads(task.kwargs),
             'meta': {'tried': task.tried}
