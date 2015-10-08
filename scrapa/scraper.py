@@ -46,7 +46,7 @@ class Scraper(object):
         self.tasks_running = 0
         self.timeout_count = 0
         self.storage = None
-        self.logger = make_logger(self.config.NAME)
+        self.logger = make_logger(self.config.NAME, level=self.config.LOGLEVEL)
 
         self.queue = asyncio.Queue(self.config.QUEUE_SIZE)
         self.http_semaphore = asyncio.Semaphore(self.config.HTTP_CONCURENCY_LIMIT)
@@ -446,6 +446,9 @@ class Scraper(object):
                             action='store_true',
                             default=False,
                             help='Clear the http cache')
+        scraper.add_argument('--loglevel', dest='loglevel',
+                            default=ScrapaConfig.LOGLEVEL,
+                            help='Loglevel: one of DEBUG, INFO, WARN, ERROR.')
 
         dump_tasks = subparsers.add_parser('dump_tasks')
         dump_tasks.add_argument('-s', '--split', default=1, type=int,

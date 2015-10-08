@@ -34,7 +34,7 @@ def make_logger(name, level='DEBUG'):
 
 @asyncio.coroutine
 def add_websocket_handler(logger, **kwargs):
-    handler = WebsocketHandler()
+    handler = WebsocketHandler(logger)
     handler.setLevel(LEVEL_DICT['DEBUG'])
     yield from handler.make_server(logger=logger, **kwargs)
     logger.addHandler(handler)
@@ -42,7 +42,8 @@ def add_websocket_handler(logger, **kwargs):
 
 
 class WebsocketHandler(logging.Handler):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, logger, *args, **kwargs):
+        self.logger = logger
         super(WebsocketHandler, self).__init__(*args, **kwargs)
         self.web_server = None
         self.dashboard_subscribers = []
@@ -66,9 +67,9 @@ class WebsocketHandler(logging.Handler):
                 if msg.data == 'close':
                     yield from ws.close()
             elif msg.tp == aiohttp.MsgType.close:
-                print('websocket connection closed')
+                self.logger.debug('websocket connection closed')
             elif msg.tp == aiohttp.MsgType.error:
-                print('ws connection closed with exception %s',
+                self.logger.debug('ws connection closed with exception %s',
                       ws.exception())
 
         self.dashboard_subscribers.remove(ws)

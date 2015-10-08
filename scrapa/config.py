@@ -39,6 +39,7 @@ class ScrapaConfig:
     REUSE_SESSION_COUNT = 1000
     STORAGE_ENABLED = True
     DEFAULT_USER_AGENT = 'Scrapa'
+    LOGLEVEL = 'INFO'
     PROXY = None
     ENCODING = 'utf-8'
     STORAGE = CallableDefaultValue(get_default_storage)
