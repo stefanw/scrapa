@@ -318,6 +318,18 @@ class Scraper(object):
         yield from self.queue.put((coro, args, kwargs, meta))
 
     @asyncio.coroutine
+    def queue_pending_tasks(self):
+        storage = yield from self.get_storage()
+        tasks = yield from storage.get_pending_tasks(self.config.NAME)
+        for task_dict in tasks:
+            yield from self.add_to_queue(
+                getattr(self, task_dict['task_name']),
+                task_dict['args'],
+                task_dict['kwargs'],
+                meta=task_dict['meta']
+            )
+
+    @asyncio.coroutine
     def prepare_schedule(self, coro, args, kwargs):
         should_run = True
         if self.storage_enabled(coro):
@@ -382,7 +394,9 @@ class Scraper(object):
                     'consumer_count': self.consumer_count
                 })
             if self.finished() and self.consumer_count == 0:
-                break
+                yield from self.queue_pending_tasks()
+                if self.finished():
+                    break
             yield from asyncio.sleep(self.config.PROGRESS_INTERVAL)
         if self.stopping:
             self.logger.info('Stopping, cleaning up...')
@@ -544,14 +558,7 @@ class Scraper(object):
                 return
             self.logger.info('Resuming scraper with %d/%d pending tasks',
                              pending_task_count, task_count)
-            tasks = yield from storage.get_pending_tasks(self.config.NAME)
-            for task_dict in tasks:
-                yield from self.add_to_queue(
-                    getattr(self, task_dict['task_name']),
-                    task_dict['args'],
-                    task_dict['kwargs'],
-                    meta=task_dict['meta']
-                )
+            yield from self.queue_pending_tasks()
         yield from self.run_start(start_coro=start_coro)
 
     @asyncio.coroutine
