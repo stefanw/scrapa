@@ -2,11 +2,12 @@ import asyncio
 from datetime import datetime
 
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import Index, Column, Integer, String, Text, Boolean, DateTime
+from sqlalchemy import (Index, Column, Integer, String, Text, Boolean, DateTime,
+                        LargeBinary)
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from .base import BaseStorage
+from .base import BaseStorage, GeneratorWrapper as GW
 from ..utils import json_loads, json_dumps
 
 Base = declarative_base()
@@ -60,7 +61,7 @@ class Cache(Base):
     cache_id = Column(String, index=True, unique=True)
     url = Column(String)
     created = Column(DateTime)
-    content = Column(String)
+    content = Column(LargeBinary)
 
     def __repr__(self):
         return "<Cache(cache_id='%s', result_id='%s', kind='%s')>" % (
@@ -119,7 +120,7 @@ class DatabaseStorage(BaseStorage):
     @asyncio.coroutine
     def get_pending_tasks(self, scraper_name):
         result = self.session.query(Task).filter_by(scraper_name=scraper_name, done=False)
-        return ({
+        return GW({
             'coro': task.name,
             'args': json_loads(task.args),
             'kwargs': json_loads(task.kwargs),
@@ -157,12 +158,13 @@ class DatabaseStorage(BaseStorage):
     def get_cached_content(self, cache_id):
         cached = self.session.query(Cache).filter_by(cache_id=cache_id).first()
         if cached:
-            return cached.content
+            return bytes(cached.content).decode('utf-8')
         return None
 
     @asyncio.coroutine
     def set_cached_content(self, cache_id, url, content):
-        self.session.add(Cache(cache_id=cache_id, url=url, content=content,
+        self.session.add(Cache(cache_id=cache_id, url=url,
+                               content=content.encode('utf-8'),
                                created=datetime.now()))
         self.session.commit()
 

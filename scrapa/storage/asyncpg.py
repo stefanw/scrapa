@@ -6,7 +6,7 @@ import psycopg2
 import sqlalchemy as sa
 from sqlalchemy.schema import CreateTable, CreateIndex
 
-from .base import BaseStorage
+from .base import BaseStorage, GeneratorWrapper as GW
 from ..utils import json_loads, json_dumps
 
 
@@ -45,7 +45,7 @@ cache_table = sa.Table('scrapa_cache', metadata,
     sa.Column('cache_id', sa.String(255)),
     sa.Column('url', sa.String(1024)),
     sa.Column('created', sa.DateTime),
-    sa.Column('content', sa.Text),
+    sa.Column('content', sa.LargeBinary),
 )
 
 cache_index = sa.Index('scrapa_cache__cache_id', cache_table.c.cache_id, unique=True)
@@ -146,7 +146,7 @@ class AsyncPostgresStorage(BaseStorage):
                     )
                 )
             )
-        return ({
+        return GW({
             'task_name': task.name,
             'args': json_loads(task.args),
             'kwargs': json_loads(task.kwargs),
@@ -211,7 +211,7 @@ class AsyncPostgresStorage(BaseStorage):
                 )
             )
             if result.rowcount > 0:
-                return list(result)[0].content
+                return bytes(list(result)[0].content).decode('utf-8')
             return None
 
     @asyncio.coroutine
@@ -221,7 +221,7 @@ class AsyncPostgresStorage(BaseStorage):
                 cache_id=cache_id,
                 url=url,
                 created=datetime.now(),
-                content=content
+                content=content.encode('utf-8')
             ))
 
     @asyncio.coroutine

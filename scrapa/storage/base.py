@@ -3,6 +3,14 @@ import hashlib
 import json
 
 
+class GeneratorWrapper(object):
+    def __init__(self, gen):
+        self.gen = gen
+
+    def __iter__(self):
+        yield from self.gen
+
+
 class BaseStorage(object):
     def get_task_id(self, coro, args, kwargs):
         task_id = hashlib.md5()
