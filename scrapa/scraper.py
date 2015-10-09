@@ -54,7 +54,7 @@ class Scraper(object):
         self._session_query_count = 0
 
     @asyncio.coroutine
-    def request(self, method, url, **kwargs):
+    def request(self, method, url='', **kwargs):
         url = self.get_full_url(url)
         session_arg = kwargs.pop('session', None)
         status_only = kwargs.pop('status_only', False)
