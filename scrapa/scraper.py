@@ -226,6 +226,11 @@ class Scraper(object):
         return html.fromstring(text)
 
     @asyncio.coroutine
+    def post(self, *args, **kwargs):
+        response = yield from self.request('POST', *args, **kwargs)
+        return response
+
+    @asyncio.coroutine
     def consume_queue(self):
         """ Use get_nowait construct until Py 3.4.4 """
         try:
