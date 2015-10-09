@@ -436,6 +436,10 @@ class Scraper(object):
         raise NotImplementedError
 
     def run_from_cli(self):
+        args = self.get_command_line_args()
+        getattr(self, args['command_name'])(**args)
+
+    def get_command_line_args(self):
         parser = argparse.ArgumentParser(description='Scrapa arguments.')
 
         subparsers = parser.add_subparsers(dest="command_name")
@@ -468,16 +472,15 @@ class Scraper(object):
         args = parser.parse_args()
         args = vars(args)
 
-        self.init_configuration(args)
-
-        command = args.get('command_name')
-        if command is not None:
-            getattr(self, command)(**args)
-        else:
+        if args.get('command_name') is None:
             args = scraper.parse_args()
-            self.scrape(**vars(args))
+            args = vars(args)
+            args['command_name'] = 'scrape'
+
+        return args
 
     def scrape(self, **kwargs):
+        self.init_configuration(kwargs)
         loop = asyncio.get_event_loop()
 
         self.add_signal_handler(loop)
@@ -552,13 +555,12 @@ class Scraper(object):
         if clear_cache:
             yield from storage.clear_cache()
 
-        start_coro = None
         if start or clear or task_count == 0:
             if clear and task_count > 0:
                 self.logger.info('Deleting %s tasks...', task_count)
                 yield from storage.clear_tasks(self.config.NAME)
             self.logger.info('Starting scraper from scratch')
-            start_coro = self.start
+            yield from self.run_start()
         else:
             pending_task_count = yield from storage.get_pending_task_count(self.config.NAME)
             if pending_task_count == 0:
@@ -567,10 +569,10 @@ class Scraper(object):
             self.logger.info('Resuming scraper with %d/%d pending tasks',
                              pending_task_count, task_count)
             yield from self.queue_pending_tasks()
-        yield from self.run_start(start_coro=start_coro)
+            yield from self.run()
 
     @asyncio.coroutine
-    def run_start(self, start_coro=None):
+    def run(self, start_coro=None):
         if self.config.ENABLE_WEBSERVER:
             self.websocket_handler = yield from add_websocket_handler(self.logger)
 
@@ -583,6 +585,10 @@ class Scraper(object):
             start = [self.run_task(start_coro)]
 
         yield from asyncio.wait([self.progress()] + start + consumers)
+
+    @asyncio.coroutine
+    def run_start(self):
+        yield from self.run(start_coro=self.start)
 
     def interrupt(self):
         loop = asyncio.get_event_loop()
