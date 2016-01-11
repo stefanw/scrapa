@@ -50,6 +50,10 @@ class BaseStorage(object):
         raise NotImplementedError
 
     @asyncio.coroutine
+    def has_result(self, scraper_name, result_id, kind):
+        raise NotImplementedError
+
+    @asyncio.coroutine
     def store_result(self, scraper_name, result_id, kind, result):
         raise NotImplementedError
 

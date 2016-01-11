@@ -170,6 +170,21 @@ class AsyncPostgresStorage(BaseStorage):
             )
 
     @asyncio.coroutine
+    def has_result(self, scraper_name, result_id, kind):
+        query = sa.and_(
+            result_table.c.scraper_name == scraper_name,
+            result_table.c.kind == kind,
+            result_table.c.result_id == result_id
+        )
+        with (yield from self.engine) as conn:
+            result_obj = yield from conn.execute(
+                result_table.select().where(
+                    query
+                )
+            )
+            return result_obj.rowcount > 0
+
+    @asyncio.coroutine
     def store_result(self, scraper_name, result_id, kind, result):
         query = sa.and_(
             result_table.c.scraper_name == scraper_name,
@@ -194,6 +209,7 @@ class AsyncPostgresStorage(BaseStorage):
                         query
                     ).values(result=json_dumps(result_value))
                 )
+                return False
             else:
                 yield from conn.execute(result_table.insert().values(
                     scraper_name=scraper_name,
@@ -201,6 +217,7 @@ class AsyncPostgresStorage(BaseStorage):
                     result_id=result_id,
                     result=json_dumps(result)
                 ))
+                return True
 
     @asyncio.coroutine
     def get_cached_content(self, cache_id):
@@ -211,7 +228,7 @@ class AsyncPostgresStorage(BaseStorage):
                 )
             )
             if result.rowcount > 0:
-                return bytes(list(result)[0].content).decode('utf-8')
+                return list(result)[0].content
             return None
 
     @asyncio.coroutine
@@ -221,7 +238,7 @@ class AsyncPostgresStorage(BaseStorage):
                 cache_id=cache_id,
                 url=url,
                 created=datetime.now(),
-                content=content.encode('utf-8')
+                content=content
             ))
 
     @asyncio.coroutine

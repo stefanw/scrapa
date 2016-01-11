@@ -34,8 +34,12 @@ class DummyStorage(BaseStorage):
         return False
 
     @asyncio.coroutine
+    def has_result(self, scraper_name, result_id, kind):
+        return False
+
+    @asyncio.coroutine
     def store_result(self, scraper_name, result_id, kind, result):
-        pass
+        return True
 
     @asyncio.coroutine
     def get_cached_content(self, cache_id):

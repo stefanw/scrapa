@@ -121,7 +121,7 @@ class DatabaseStorage(BaseStorage):
     def get_pending_tasks(self, scraper_name):
         result = self.session.query(Task).filter_by(scraper_name=scraper_name, done=False)
         return GW({
-            'coro': task.name,
+            'task_name': task.name,
             'args': json_loads(task.args),
             'kwargs': json_loads(task.kwargs),
             'meta': {'tried': task.tried}
@@ -139,9 +139,16 @@ class DatabaseStorage(BaseStorage):
         self.session.commit()
 
     @asyncio.coroutine
+    def has_result(self, scraper_name, result_id, kind):
+        params = dict(scraper_name=scraper_name, kind=kind, result_id=result_id)
+        result_obj = self.session.query(Result).filter_by(**params).first()
+        return bool(result_obj)
+
+    @asyncio.coroutine
     def store_result(self, scraper_name, result_id, kind, result):
         params = dict(scraper_name=scraper_name, kind=kind, result_id=result_id)
         result_obj = self.session.query(Result).filter_by(**params).first()
+        result = True
         if result_obj:
             result_value = json_loads(result_obj.result)
             if isinstance(result_value, dict):
@@ -149,22 +156,24 @@ class DatabaseStorage(BaseStorage):
             else:
                 result_value = result
             self.session.query(Result).filter_by(id=result_obj.id).update({'result': json_dumps(result_value)})
+            result = False
         else:
             params.update({'result': json_dumps(result)})
             self.session.add(Result(**params))
         self.session.commit()
+        return result
 
     @asyncio.coroutine
     def get_cached_content(self, cache_id):
         cached = self.session.query(Cache).filter_by(cache_id=cache_id).first()
         if cached:
-            return bytes(cached.content).decode('utf-8')
+            return cached.content
         return None
 
     @asyncio.coroutine
     def set_cached_content(self, cache_id, url, content):
         self.session.add(Cache(cache_id=cache_id, url=url,
-                               content=content.encode('utf-8'),
+                               content=content,
                                created=datetime.now()))
         self.session.commit()
 
