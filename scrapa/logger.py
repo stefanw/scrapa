@@ -76,7 +76,7 @@ class WebsocketHandler(logging.Handler):
         return ws
 
     @asyncio.coroutine
-    def make_server(self, logger=None, host='127.0.0.1', port='8080', loop=None):
+    def make_server(self, logger=None, host='127.0.0.1', port='5494', loop=None):
         from .dashboard import index, static
 
         if loop is None:
