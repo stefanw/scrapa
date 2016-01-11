@@ -4,6 +4,7 @@ import functools
 import hashlib
 from itertools import repeat
 import json
+from urllib.parse import urljoin, urlsplit, urlencode, parse_qsl, urlunsplit
 
 
 class DateTimeDecoder(json.JSONDecoder):
@@ -118,3 +119,10 @@ def async(f, store=False):
     if store:
         f.scrapa_store = True
     return asyncio.coroutine(f)
+
+
+def get_url_parts(url):
+    url_parts = urlsplit(url)
+    url_dict = vars(url_parts)
+    url_dict['query'] = parse_qsl(url_dict['query'])
+    return url_dict
