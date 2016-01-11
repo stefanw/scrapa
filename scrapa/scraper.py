@@ -2,21 +2,21 @@ import argparse
 import asyncio
 from contextlib import contextmanager
 from datetime import datetime
-import json
 import math
 import signal
+import ssl
 import sys
 import traceback
 from urllib.parse import urljoin, urlsplit, urlencode, parse_qsl, urlunsplit
 import uuid
 
 import aiohttp
-from lxml import html
 
 from .logger import make_logger, add_websocket_handler
 from .exceptions import HttpConnectionError, HttpError
 from .utils import (args_kwargs_iterator, add_func_to_iterator, get_cache_id,
                     json_dumps, json_loads)
+from .response import ScrapaClientRequest, ScrapaClientResponse, CachedResponse
 from .config import ScrapaConfig, DefaultValue
 
 if not hasattr(asyncio, 'ensure_future'):
@@ -50,12 +50,11 @@ class Scraper(object):
 
         self.queue = asyncio.Queue(self.config.QUEUE_SIZE)
         self.http_semaphore = asyncio.Semaphore(self.config.HTTP_CONCURENCY_LIMIT)
-        self._session_pool = [None for _ in range(self.config.HTTP_CONCURENCY_LIMIT)]
+        self._session_pool = [None for _ in range(self.config.SESSION_POOL_SIZE)]
         self._session_query_count = 0
 
     @asyncio.coroutine
     def request(self, method, url='', **kwargs):
-        url = self.get_full_url(url)
         session_arg = kwargs.pop('session', None)
         status_only = kwargs.pop('status_only', False)
         raise_for_status = kwargs.pop('raise_for_status', True)
@@ -65,13 +64,14 @@ class Scraper(object):
         for retry_num in range(self.config.MAX_RETRIES):
             with (yield from self.http_semaphore):
                 with self.use_request_session(session_arg) as session:
-                    full_url = self.get_full_url(url, params=kwargs.get('params', {}))
+                    url = self.get_full_url(url)
                     try:
                         start_time = datetime.utcnow()
                         response = yield from asyncio.wait_for(
                             session.request(method, url, **kwargs),
                             self.config.CONNECT_TIMEOUT
                         )
+                        response.scrapa = self
                         if not status_only:
                             yield from response.read()
                     except asyncio.TimeoutError as e:
@@ -93,7 +93,7 @@ class Scraper(object):
                             'method': method,
                             'kwargs': kwargs,
                             'session_id': id(session),
-                            'url': full_url,
+                            'url': url,
                             'status': response.status if response else None,
                             'retry': retry_num,
                             'message': error_msg,
@@ -136,6 +136,8 @@ class Scraper(object):
         return {'User-Agent': self.config.DEFAULT_USER_AGENT}
 
     def create_session(self, **kwargs):
+        kwargs.setdefault('response_class', ScrapaClientResponse)
+        kwargs.setdefault('request_class', ScrapaClientRequest)
         connector = self.get_connector()
         request_kwargs = self.get_default_session_kwargs()
         request_kwargs.update(kwargs)
@@ -180,50 +182,63 @@ class Scraper(object):
                 current_session._use_count += 1
 
     def get_connector(self):
+        custom_kwargs = {
+            'verify_ssl': self.config.VERIFY_SSL
+        }
+
+        if self.config.CUSTOM_CA:
+            ssl_ctx = ssl.create_default_context(cafile=self.config.CUSTOM_CA)
+            custom_kwargs['ssl_context'] = ssl_ctx
+
         if self.config.PROXY is not None:
             conn = aiohttp.connector.ProxyConnector(
                 proxy=self.config.PROXY,
                 conn_timeout=self.config.CONNECT_TIMEOUT,
-                limit=self.config.CONNECTOR_LIMIT)
+                limit=self.config.CONNECTOR_LIMIT,
+                **custom_kwargs)
         else:
             conn = aiohttp.TCPConnector(
-                verify_ssl=False,
                 conn_timeout=self.config.CONNECT_TIMEOUT,
-                limit=self.config.CONNECTOR_LIMIT
+                limit=self.config.CONNECTOR_LIMIT,
+                **custom_kwargs
             )
         return conn
 
     @asyncio.coroutine
-    def get(self, *args, **kwargs):
-        response = yield from self.request('GET', *args, **kwargs)
+    def get(self, url='', *args, **kwargs):
+        cache_url = self.get_full_url(url, params=kwargs.get('params', {}))
+        cache = kwargs.pop('cache', False)
+        if cache:
+            cache_id = get_cache_id(cache_url, *args, **kwargs)
+            cached_result = yield from self.get_cached_content(cache_id)
+            if cached_result is not None:
+                return CachedResponse(cache_url, cached_result)
+        response = yield from self.request('GET', url, *args, **kwargs)
+        if cache:
+            blob = yield from response.read()
+            yield from self.set_cached_content(cache_id, response.url, blob)
         return response
 
     @asyncio.coroutine
     def get_text(self, url='', *args, **kwargs):
-        response = None
-        url = self.get_full_url(url)
         encoding = kwargs.pop('encoding', self.config.ENCODING)
-        cache = kwargs.pop('cache', False)
-        if cache:
-            cache_id = get_cache_id(url, *args, **kwargs)
-            cached_result = yield from self.get_cached_content(cache_id)
-            if cached_result is not None:
-                return cached_result
         response = yield from self.get(url, *args, **kwargs)
         text = yield from response.text(encoding=encoding)
-        if cache:
-            yield from self.set_cached_content(cache_id, response.url, text)
         return text
 
     @asyncio.coroutine
     def get_json(self, *args, **kwargs):
-        text = yield from self.get_text(*args, **kwargs)
-        return json.loads(text)
+        encoding = kwargs.pop('encoding', self.config.ENCODING)
+        response = yield from self.get(*args, **kwargs)
+        obj = yield from response.json(encoding=encoding)
+        return obj
 
     @asyncio.coroutine
     def get_dom(self, *args, **kwargs):
-        text = yield from self.get_text(*args, **kwargs)
-        return html.fromstring(text)
+        encoding = kwargs.pop('encoding', self.config.ENCODING)
+        response = yield from self.get(*args, **kwargs)
+        dom = yield from response.dom(encoding=encoding)
+        return dom
 
     @asyncio.coroutine
     def post(self, *args, **kwargs):
@@ -237,7 +252,7 @@ class Scraper(object):
             self.consumer_count += 1
             while True:
                 try:
-                    if self.finished():
+                    if self.terminate_consumers:
                         return
                     coro, args, kwargs, meta = self.queue.get_nowait()
                     self.tasks_running += 1
@@ -252,8 +267,6 @@ class Scraper(object):
                         if hasattr(self.queue, 'task_done'):
                             self.queue.task_done()
                 except asyncio.QueueEmpty:
-                    if self.finished():
-                        return
                     yield from asyncio.sleep(0.5)
         finally:
             self.consumer_count -= 1
@@ -285,6 +298,8 @@ class Scraper(object):
             self.tasks_running += 1
             result = (yield from coro(*args, **kwargs))
         except Exception as e:
+            self.logger.error('Exception running %s(*%s, **%s)',
+                              coro.__name__, args, kwargs)
             self.logger.exception(e)
             exception = traceback.format_exc(exception)
             failed = True
@@ -305,10 +320,17 @@ class Scraper(object):
 
     @asyncio.coroutine
     def schedule_many(self, coro_arg, generator):
+        count = 0
+        schedule_count = 0
         generator = args_kwargs_iterator(generator)
         generator = add_func_to_iterator(coro_arg, generator)
         for coro, (args, kwargs) in generator:
-            yield from self.schedule_one(coro, *args, **kwargs)
+            scheduled = yield from self.schedule_one(coro, *args, **kwargs)
+            count += 1
+            if scheduled:
+                schedule_count += 1
+        self.logger.info('Scheduled %s tasks (%s already present)',
+                         schedule_count, count - schedule_count)
 
     @asyncio.coroutine
     def schedule_one(self, coro, *args, **kwargs):
@@ -317,6 +339,8 @@ class Scraper(object):
         should_run = yield from self.prepare_schedule(coro, args, kwargs)
         if should_run:
             yield from self.add_to_queue(coro, args, kwargs)
+            return True
+        return False
 
     @asyncio.coroutine
     def add_to_queue(self, coro, args, kwargs, meta=None):
@@ -363,6 +387,11 @@ class Scraper(object):
         yield from storage.store_task_result(*args, **kwargs)
 
     @asyncio.coroutine
+    def has_result(self, result_id, kind):
+        storage = yield from self.get_storage()
+        yield from storage.has_result(self.config.NAME, result_id, kind)
+
+    @asyncio.coroutine
     def store_result(self, result_id, kind, result):
         storage = yield from self.get_storage()
         yield from storage.store_result(self.config.NAME, result_id, kind, result)
@@ -398,9 +427,11 @@ class Scraper(object):
                     'task_count': self.tasks_running,
                     'consumer_count': self.consumer_count
                 })
-            if self.finished() and self.consumer_count == 0:
+            if self.stopping:
+                break
+            if self.queue_finished():
                 yield from self.queue_pending_tasks()
-                if self.finished():
+                if self.queue_finished():
                     break
             yield from asyncio.sleep(self.config.PROGRESS_INTERVAL)
         if self.stopping:
@@ -411,6 +442,7 @@ class Scraper(object):
 
     @asyncio.coroutine
     def clean_up(self):
+        self.terminate_consumers = True
         for session in self._session_pool:
             if session is not None and not session.closed:
                 session.close()
@@ -418,9 +450,11 @@ class Scraper(object):
             yield from self.websocket_handler.close_server()
         return None
 
-    def get_full_url(self, url, params=None):
-        if self.config.BASE_URL and not url.startswith(('http://', 'https://')):
-            return urljoin(self.config.BASE_URL, url)
+    def get_full_url(self, url, base_url=None, params=None):
+        if base_url is None:
+            base_url = self.config.BASE_URL
+        if base_url and not url.startswith(('http://', 'https://')):
+            return urljoin(base_url, url)
         if params is not None:
             url_parts = urlsplit(url)
             url_dict = vars(url_parts)
@@ -578,6 +612,7 @@ class Scraper(object):
 
         consumers = []
         if self.config.ENABLE_QUEUE:
+            self.terminate_consumers = False
             consumers = [self.consume_queue() for _ in range(self.config.CONSUMER_COUNT)]
 
         start = []
