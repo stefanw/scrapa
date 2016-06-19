@@ -1,15 +1,19 @@
 import asyncio
+import base64
 from datetime import datetime
 import functools
 import hashlib
 from itertools import repeat
 import json
-from urllib.parse import urljoin, urlsplit, urlencode, parse_qsl, urlunsplit
+from urllib.parse import urlsplit, parse_qsl
+import webbrowser
+
+import aiohttp
 
 
-class DateTimeDecoder(json.JSONDecoder):
+class CustomDecoder(json.JSONDecoder):
     def __init__(self, *args, **kargs):
-        super(DateTimeDecoder, self).__init__(
+        super(CustomDecoder, self).__init__(
                 object_hook=self.dict_to_object, *args, **kargs)
 
     def dict_to_object(self, d):
@@ -25,7 +29,7 @@ class DateTimeDecoder(json.JSONDecoder):
             return d
 
 
-class DateTimeEncoder(json.JSONEncoder):
+class CustomEncoder(json.JSONEncoder):
     """ Instead of letting the default encoder convert datetime to string,
         convert datetime objects into a dict, which can be decoded by the
         DateTimeDecoder
@@ -44,16 +48,20 @@ class DateTimeEncoder(json.JSONEncoder):
                 'second': obj.second,
                 'microsecond': obj.microsecond,
             }
+        elif isinstance(obj, aiohttp.MultiDict):
+            return {
+                k: obj.getall(k) for k in obj
+            }
         else:
-            return super(DateTimeEncoder, self).default(obj)
+            return super(CustomEncoder, self).default(obj)
 
 
 def json_dumps(obj, indent=2):
-    return json.dumps(obj, cls=DateTimeEncoder, indent=indent, sort_keys=True)
+    return json.dumps(obj, cls=CustomEncoder, indent=indent, sort_keys=True)
 
 
 def json_loads(obj):
-    return json.loads(obj, cls=DateTimeDecoder)
+    return json.loads(obj, cls=CustomDecoder)
 
 
 def args_kwargs_iterator(iterator):
@@ -114,10 +122,20 @@ def doublewrap(f):
     return new_dec
 
 
+def mark_store(f):
+    f.store = True
+
+
 @doublewrap
 def async(f, store=False):
     if store:
-        f.scrapa_store = True
+        mark_store(f)
+    return asyncio.coroutine(f)
+
+
+@doublewrap
+def store(f):
+    mark_store(f)
     return asyncio.coroutine(f)
 
 
@@ -126,3 +144,8 @@ def get_url_parts(url):
     url_dict = vars(url_parts)
     url_dict['query'] = parse_qsl(url_dict['query'])
     return url_dict
+
+
+def show_in_browser(html):
+    source = base64.b64encode(html.encode('utf-8')).decode('utf-8')
+    webbrowser.open('data:text/html;base64,%s' % source)

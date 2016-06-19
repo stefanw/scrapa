@@ -65,13 +65,14 @@
     </style>
 </head>
 <body>
-<!--[if lt IE 9]>
-<p class="browsehappy">You are using an <strong>outdated</strong> browser. Please <a href="http://browsehappy.com/">upgrade your browser</a> to improve your experience.</p>
-<![endif]-->
 
 <div id="swimlane"></div>
 
 <div id="output"></div>
+
+<div>
+  <ul id="exceptions"></ul>
+</div>
 
 <script src="static/vendor/jquery/dist/jquery.min.js"></script>
 <script src="/static/vendor/d3/d3.js" charset="utf-8"></script>
@@ -92,14 +93,23 @@ $(function(){
   var width = 960;
   var height = 800;
 
-  var swimlane = swimlaneChart().width(800);
+  var swimlane = swimlaneChart().width(800).maxTime(20 * 1000);
+  var chartInterval;
   var chart;
+
+  var continuousUpdate = function() {
+    chart.call(swimlane.update);
+  };
 
   function updateRequestChart(data) {
     if (chart === undefined) {
       chart = d3.select('#swimlane')
         .datum(data).call(swimlane);
     }
+    if (!chartInterval) {
+      chartInterval = window.setInterval(continuousUpdate, 100);
+    }
+
     chart.datum(data).call(swimlane.update);
   }
 
@@ -109,8 +119,9 @@ $(function(){
 
   function onMessage(e) {
     var evt = JSON.parse(e.data);
+    console.log(evt.type, evt.data);
     if (evt.type === 'request') {
-      var sesid = evt.data.session_id;
+      var sesid = evt.task;
       var requestLane;
       if (laneDict[sesid] === undefined) {
         laneDict[sesid] = lanes.length;
@@ -132,15 +143,20 @@ $(function(){
       req.lane = laneDict[sesid];
       req['class'] = 'status-' + req.status;
 
-      // requestLane.dates.push(new Date(start));
-      // requestLane.dates.push(new Date(end));
       requests.push(req);
       updateRequestChart({
         lanes: lanes,
         items: requests
       });
-    } else {
-      console.log(evt.data);
+    } else if (evt.type === 'exception') {
+      if (evt.data !== null) {
+        var link = 'data:text/html;charset=utf-8,' + encodeURIComponent(evt.data);
+        $('#exceptions').append($('<li>').html($('<a>', {
+          'href': link,
+          'target': '_blank',
+          'text': evt.name
+        })));
+      }
     }
   }
 
@@ -154,6 +170,8 @@ $(function(){
   }
   function onClose(evt) {
     writeToScreen("DISCONNECTED");
+    window.clearInterval(chartInterval);
+    chartInterval = null;
   }
   function onError(evt) {
     writeToScreen('<span style="color: red;">ERROR:</span> ' + evt.data);

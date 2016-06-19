@@ -1,8 +1,12 @@
 import asyncio
 import logging
+import sys
 
 import aiohttp
 from aiohttp import web
+
+from diagnostics.models import ExceptionInfo
+from diagnostics.logging import HtmlFormatter
 
 from .utils import json_dumps
 
@@ -47,12 +51,40 @@ class WebsocketHandler(logging.Handler):
         super(WebsocketHandler, self).__init__(*args, **kwargs)
         self.web_server = None
         self.dashboard_subscribers = []
+        self.html_formatter = HtmlFormatter()
 
     def emit(self, update):
+        scrapa_data = None
         if hasattr(update, 'scrapa'):
-            for sub in self.dashboard_subscribers:
-                if not sub.closed:
-                    sub.send_str(json_dumps(update.scrapa))
+            scrapa_data = update.scrapa
+
+        if scrapa_data is not None:
+            self.emit_to_subscribers(json_dumps(scrapa_data))
+
+        data = self.get_html_for_exception(update)
+        if scrapa_data and data is not None:
+            exception_data = dict(scrapa_data)
+            exception_data['data'] = data
+            exception_data['name'] = sys.exc_info()[0].__name__
+            self.emit_to_subscribers(json_dumps(exception_data))
+
+    def emit_to_subscribers(self, data):
+        for sub in self.dashboard_subscribers:
+            if not sub.closed:
+                sub.send_str(data)
+
+    def get_html_for_exception(self, record):
+        exception_info = record.exc_info
+        record.exc_info = False
+
+        if isinstance(exception_info, tuple):
+            exception_info = ExceptionInfo.from_values(*exception_info)
+        elif exception_info:
+            exception_info = ExceptionInfo.new()
+
+        if exception_info:
+            return self.html_formatter.format_exception(exception_info,
+                record.getMessage())
 
     @asyncio.coroutine
     def websocket_handler(self, request):

@@ -31,6 +31,7 @@ function swimlaneChart(config) {
 
   var width = 960;
   var height = 500;
+  var maxTime = 1000 * 60;
   config = config || {};
   var margin = config.margin || {top: 20, right: 15, bottom: 15, left: 60};
 
@@ -130,7 +131,9 @@ function swimlaneChart(config) {
         var paths = {}, d, offset = 0.5 * y2(1) + 0.5, result = [];
         for (var i = 0; i < items.length; i++) {
           d = items[i];
-          if (!paths[d.class]) paths[d.class] = '';
+          if (!paths[d.class]) {
+            paths[d.class] = '';
+          }
           paths[d.class] += ['M',x(d.start),(y2(d.lane) + offset),'H',x(d.end)].join(' ');
         }
 
@@ -186,25 +189,14 @@ function swimlaneChart(config) {
           .attr('x', function(d) { return x1(d.start); })
           .attr('y', function(d) { return y1(d.lane) + 0.1 * y1(1) + 0.5; })
           .attr('width', function(d) { return x1(d.end) - x1(d.start); })
-          .attr('height', function(d) { return 0.8 * y1(1); });
+          .attr('height', function(d) { return 0.8 * y1(1); })
+          .on('click', function(d){
+            if (d.data) {
+              window.open('data:text/html;charset=utf-8;base64,' + d.data, 'request');
+            }
+          });
 
         rects.exit().remove();
-
-        // update the item labels
-        var labels = itemRects.selectAll('.itemLabel')
-          .data(visItems, function (d) { return d.id; });
-
-        labels
-          .enter().append('text')
-            .text(function (d) { return d.name; })
-            .attr('text-anchor', 'start')
-            .attr('class', 'itemLabel');
-
-        labels
-          .attr('x', function(d) { return x1(Math.max(d.start, minExtent)) + 2; })
-          .attr('y', function(d) { return y1(d.lane) + 0.4 * y1(1) + 0.5; });
-
-        labels.exit().remove();
       }
 
 
@@ -217,9 +209,15 @@ function swimlaneChart(config) {
       var ext = d3.extent(lanes, function(d) { return d.id; });
       var y1 = d3.scale.linear().domain([ext[0], ext[1] + 1]).range([0, mainHeight]);
       var y2 = d3.scale.linear().domain([ext[0], ext[1] + 1]).range([0, miniHeight]);
+
+      var min = d3.time.minute(d3.min(items, function(d) { return d.start; }));
+      if (maxTime !== undefined) {
+        // Use minimum of maxTime and current maximum time needed
+        min = new Date(Math.max(min.getTime(), (new Date(now.getTime() - maxTime)).getTime()));
+      }
+
       var x = d3.time.scale()
-        .domain([d3.time.minute(d3.min(items, function(d) { return d.start; })),
-             now])
+        .domain([min, now])
         .range([0, width]);
       var x1 = d3.time.scale().range([0, width]);
 
@@ -246,14 +244,14 @@ function swimlaneChart(config) {
         .scale(x1)
         .orient('bottom')
         .ticks(d3.time.second, 1)
-        .tickFormat(d3.time.format('%a %d'))
+        .tickFormat(d3.time.format('%S.%L'))
         .tickSize(6, 0, 0);
 
       var xMonthAxis = d3.svg.axis()
         .scale(x)
         .orient('top')
         .ticks(d3.time.minute, 1)
-        .tickFormat(d3.time.format('%H %M'))
+        .tickFormat(d3.time.format('%H %M.%S'))
         .tickSize(15, 0, 0);
 
       var x1MonthAxis = d3.svg.axis()
@@ -395,5 +393,12 @@ function swimlaneChart(config) {
     height = value;
     return my;
   };
+
+  my.maxTime = function(value) {
+    if (!arguments.length) return maxTime;
+    maxTime = value;
+    return my;
+  };
+
   return my;
 }

@@ -35,6 +35,7 @@ setup(
     install_requires=[
         'aiohttp',
         'lxml',
+        'diagnostics'
     ],
     include_package_data=True,
     classifiers=[
