@@ -10,16 +10,15 @@ A scraping library on top of Python 3 `asyncio` and `aiohttp`.
 # example.py
 from itertools import chain
 
-from scrapa import Scraper, async
+import scrapa
 from scrapa.storage.database import DatabaseStorage
 
 
-class MyScraper(Scraper):
+class MyScraper(scrapa.Scraper):
     BASE_URL = 'http://example.org/'
 
     # All methods that do IO need to be marked as coroutines
-    @async
-    def start(self):
+    async def start(self):
         # Get links on a page
         page_links = yield from self.get_page_links()
         # Get more links on all these pages in parallel.
@@ -33,16 +32,15 @@ class MyScraper(Scraper):
         # This returns immediately and the queue is processed in the event loop
         print('DONE')
 
-    @async
-    def get_page_links(self, url=''):
+    async def get_page_links(self, url=''):
         # Get lxml DOM from url
         doc = yield from self.get_dom(url)
         # Return a generator of urls (but could return anything)
         return (link.attrib['href'] for link in doc.xpath('.//a'))
 
     # Store these tasks
-    @async(store=True)
-    def get_images(self, url):
+    @scrapa.store
+    async def get_images(self, url):
         doc = yield from self.get_dom(url)
         for i in doc.xpath('.//img'):
             # Store result with id, type and some data

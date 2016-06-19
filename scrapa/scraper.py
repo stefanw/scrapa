@@ -1,7 +1,8 @@
 import argparse
 import asyncio
+import base64
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 import math
 import signal
 import ssl
@@ -9,15 +10,18 @@ import sys
 import traceback
 from urllib.parse import urljoin, urlsplit, urlencode, parse_qsl, urlunsplit
 import uuid
+from collections import Counter
 
 import aiohttp
 
 from .logger import make_logger, add_websocket_handler
 from .exceptions import HttpConnectionError, HttpError
 from .utils import (args_kwargs_iterator, add_func_to_iterator, get_cache_id,
-                    json_dumps, json_loads)
+                    json_dumps, json_loads, store)
 from .response import ScrapaClientRequest, ScrapaClientResponse, CachedResponse
 from .config import ScrapaConfig, DefaultValue
+from .session import SessionWrapper
+
 
 if not hasattr(asyncio, 'ensure_future'):
     asyncio.ensure_future = asyncio.async
@@ -65,6 +69,7 @@ class Scraper(object):
             with (yield from self.http_semaphore):
                 with self.use_request_session(session_arg) as session:
                     url = self.get_full_url(url)
+                    b64_data = None
                     try:
                         start_time = datetime.utcnow()
                         response = yield from asyncio.wait_for(
@@ -73,7 +78,8 @@ class Scraper(object):
                         )
                         response.scrapa = self
                         if not status_only:
-                            yield from response.read()
+                            b64_data = yield from response.read()
+                            b64_data = base64.b64encode(b64_data).decode('utf-8'),
                     except asyncio.TimeoutError as e:
                         error_msg = 'Request timed out'
                         self.timeout_count += 1
@@ -98,6 +104,7 @@ class Scraper(object):
                             'retry': retry_num,
                             'message': error_msg,
                             'timestamp': start_time,
+                            'data': b64_data,
                             'duration': int((datetime.utcnow() - start_time).total_seconds() * 1000)
                         })
                         try:
@@ -142,7 +149,7 @@ class Scraper(object):
         request_kwargs = self.get_default_session_kwargs()
         request_kwargs.update(kwargs)
         self.logger.debug('Creating new session with %s and %s', connector, request_kwargs)
-        return aiohttp.ClientSession(connector=connector, **request_kwargs)
+        return SessionWrapper(self, aiohttp.ClientSession(connector=connector, **request_kwargs))
 
     @contextmanager
     def get_session(self, **kwargs):
@@ -209,35 +216,49 @@ class Scraper(object):
         cache_url = self.get_full_url(url, params=kwargs.get('params', {}))
         cache = kwargs.pop('cache', False)
         if cache:
+            start_time = datetime.utcnow()
             cache_id = get_cache_id(cache_url, *args, **kwargs)
             cached_result = yield from self.get_cached_content(cache_id)
             if cached_result is not None:
-                return CachedResponse(cache_url, cached_result)
+                self.log_request({
+                    'req_uuid': str(uuid.uuid4()),
+                    'method': 'GET',
+                    'kwargs': kwargs,
+                    'session_id': None,
+                    'url': cache_url,
+                    'status': 200,
+                    'retry': 0,
+                    'message': None,
+                    'timestamp': start_time,
+                    'data': cached_result.decode('utf-8', 'replace'),
+                    'duration': int((datetime.utcnow() - start_time).total_seconds() * 1000)
+                })
+
+                return CachedResponse(self, cache_url, cached_result)
         response = yield from self.request('GET', url, *args, **kwargs)
         if cache:
-            blob = yield from response.read()
-            yield from self.set_cached_content(cache_id, response.url, blob)
+            yield from self.set_cached_content(cache_id, response.url, response)
         return response
 
     @asyncio.coroutine
     def get_text(self, url='', *args, **kwargs):
         encoding = kwargs.pop('encoding', self.config.ENCODING)
         response = yield from self.get(url, *args, **kwargs)
-        text = yield from response.text(encoding=encoding)
+        text = yield from response.get_text(encoding=encoding)
         return text
 
     @asyncio.coroutine
     def get_json(self, *args, **kwargs):
         encoding = kwargs.pop('encoding', self.config.ENCODING)
         response = yield from self.get(*args, **kwargs)
-        obj = yield from response.json(encoding=encoding)
+        obj = yield from response.get_json(encoding=encoding)
         return obj
 
     @asyncio.coroutine
     def get_dom(self, *args, **kwargs):
         encoding = kwargs.pop('encoding', self.config.ENCODING)
         response = yield from self.get(*args, **kwargs)
-        dom = yield from response.dom(encoding=encoding)
+        dom = yield from response.get_dom(encoding=encoding)
         return dom
 
     @asyncio.coroutine
@@ -295,16 +316,31 @@ class Scraper(object):
         value = None
         exception = None
         try:
+            self.stats['counter']['tasks_tried'] += 1
             self.tasks_running += 1
+            self.log_task_start({
+                'task_name': coro.__name__,
+                'args': args,
+                'kwargs': kwargs,
+            })
             result = (yield from coro(*args, **kwargs))
+            self.log_task_end({
+                'task_name': coro.__name__,
+                'args': args,
+                'kwargs': kwargs,
+                'result': str(result)
+            })
         except Exception as e:
             self.logger.error('Exception running %s(*%s, **%s)',
                               coro.__name__, args, kwargs)
-            self.logger.exception(e)
+            # self.logger.exception(e)
+            self.stats['counter']['tasks_failed'] += 1
+            self.log_exception(e)
             exception = traceback.format_exc(exception)
             failed = True
             raise e
         else:
+            self.stats['counter']['tasks_succeeded'] += 1
             value = result
             done = True
             return result
@@ -315,7 +351,7 @@ class Scraper(object):
                     self.config.NAME,
                     coro, args, kwargs,
                     done, failed,
-                    value, exception
+                    str(value), exception
                 )
 
     @asyncio.coroutine
@@ -373,7 +409,7 @@ class Scraper(object):
         return self.storage
 
     def storage_enabled(self, coro):
-        return getattr(coro, 'scrapa_store', False) and self.config.STORAGE_ENABLED
+        return getattr(coro, 'store', False) and self.config.STORAGE_ENABLED
 
     @asyncio.coroutine
     def store_task(self, coro, args, kwargs):
@@ -403,7 +439,8 @@ class Scraper(object):
         return result
 
     @asyncio.coroutine
-    def set_cached_content(self, cache_id, url, content):
+    def set_cached_content(self, cache_id, url, response):
+        content = yield from response.read()
         storage = yield from self.get_storage()
         yield from storage.set_cached_content(cache_id, url, content)
 
@@ -420,8 +457,20 @@ class Scraper(object):
     def progress(self):
         while True:
             if not self.finished():
-                self.logger.info('Tasks queued: %d, running: %d' % (
-                                 self.queue.qsize(), self.tasks_running))
+                duration_seconds = (datetime.utcnow() - self.stats['start_time']).seconds
+                tasks_per_second = 0
+                if duration_seconds > 0:
+                    tasks_per_second = self.stats['counter']['tasks_succeeded'] / duration_seconds
+                eta = None
+                if tasks_per_second > 0:
+                    eta = timedelta(seconds=self.queue.qsize() / tasks_per_second)
+                self.logger.info('{success}/{tried} tasks succeeded out of {queued} (running: {running}). ETA: {eta}'.format(
+                     queued=self.queue.qsize(),
+                     running=self.tasks_running,
+                     success=self.stats['counter']['tasks_succeeded'],
+                     tried=self.stats['counter']['tasks_tried'],
+                     eta=eta
+                ))
                 self.log_progress({
                     'queue_size': self.queue.qsize(),
                     'task_count': self.tasks_running,
@@ -457,7 +506,7 @@ class Scraper(object):
             return urljoin(base_url, url)
         if params is not None:
             url_parts = urlsplit(url)
-            url_dict = vars(url_parts)
+            url_dict = url_parts._asdict()
             qs_list = parse_qsl(url_dict['query'])
             qs_list += list(params.items())
             qs_string = urlencode(qs_list)
@@ -492,6 +541,7 @@ class Scraper(object):
         scraper.add_argument('--loglevel', dest='loglevel',
                             default=ScrapaConfig.LOGLEVEL,
                             help='Loglevel: one of DEBUG, INFO, WARN, ERROR.')
+        self.add_arguments(scraper)
 
         dump_tasks = subparsers.add_parser('dump_tasks')
         dump_tasks.add_argument('-s', '--split', default=1, type=int,
@@ -513,9 +563,24 @@ class Scraper(object):
 
         return args
 
+    def add_arguments(self, parser):
+        pass
+
+    def configure(self, **kwargs):
+        pass
+
     def scrape(self, **kwargs):
         self.init_configuration(kwargs)
         loop = asyncio.get_event_loop()
+
+        old_excepthook = None
+        try:
+            from IPython.core import ultratb
+            old_excepthook = sys.excepthook
+            sys.excepthook = ultratb.FormattedTB(mode='Verbose',
+                    color_scheme='Linux', call_pdb=1)
+        except ImportError:
+            pass
 
         self.add_signal_handler(loop)
 
@@ -523,6 +588,8 @@ class Scraper(object):
             loop.run_until_complete(self.check_start(**kwargs))
         finally:
             loop.close()
+            if old_excepthook is not None:
+                sys.excepthook = old_excepthook
             self.logger.info('Done.')
 
     def dump_tasks(self, split=1, output=None, prefix='scrapa-', **kwargs):
@@ -589,6 +656,8 @@ class Scraper(object):
         if clear_cache:
             yield from storage.clear_cache()
 
+        self.configure(**kwargs)
+
         if start or clear or task_count == 0:
             if clear and task_count > 0:
                 self.logger.info('Deleting %s tasks...', task_count)
@@ -618,6 +687,8 @@ class Scraper(object):
         start = []
         if start_coro is not None:
             start = [self.run_task(start_coro)]
+
+        self.stats = {'counter': Counter(), 'start_time': datetime.utcnow()}
 
         yield from asyncio.wait([self.progress()] + start + consumers)
 
@@ -653,16 +724,35 @@ class Scraper(object):
         for signame in ('SIGINT',):
             loop.remove_signal_handler(getattr(signal, signame))
 
-    def log_request(self, info):
-        self.logger.debug('request', extra={'scrapa': {
+    def get_task_id(self):
+        return id(asyncio.Task.current_task())
+
+    def log_debug(self, typ, info):
+        self.logger.debug(typ, extra={'scrapa': {
             'scraper': self.config.NAME,
-            'type': 'request',
+            'task': self.get_task_id(),
+            'type': typ,
+            'time': datetime.now().isoformat(),
             'data': info
         }})
 
-    def log_progress(self, info):
-        self.logger.debug('progress', extra={'scrapa': {
+    def log_task_start(self, info):
+        self.log_debug('task_start', info)
+
+    def log_task_end(self, info):
+        self.log_debug('task_end', info)
+
+    def log_request(self, info):
+        self.log_debug('request', info)
+
+    def log_exception(self, info):
+        self.logger.exception('exception', exc_info=True, extra={'scrapa': {
             'scraper': self.config.NAME,
-            'type': 'progress',
-            'data': info
+            'task': self.get_task_id(),
+            'type': 'exception',
+            'time': datetime.now().isoformat(),
+            'data': None
         }})
+
+    def log_progress(self, info):
+        self.log_debug('progress', info)

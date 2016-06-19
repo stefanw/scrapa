@@ -1,9 +1,23 @@
 import asyncio
-import json
+from json import loads as json_loads
 
 from lxml import html
+from lxml import etree
+
 from aiohttp.client import ClientResponse, ClientRequest
 from aiohttp import hdrs, helpers
+
+from .utils import show_in_browser
+
+
+class VerboseElement(html.HtmlElement):
+    def __str__(self):
+        return '<%s: %s>' % (self.tag, etree.tostring(self))
+
+
+parser_lookup = etree.ElementDefaultClassLookup(element=VerboseElement)
+html_parser = etree.HTMLParser()
+html_parser.set_element_class_lookup(parser_lookup)
 
 
 class ScrapaClientRequest(ClientRequest):
@@ -38,7 +52,7 @@ class ScrapaClientResponse(ClientResponse):
         return helpers.parse_mimetype(ctype)
 
     @asyncio.coroutine
-    def text(self, *args, **kwargs):
+    def get_text(self, *args, **kwargs):
         encoding = kwargs.pop('encoding', self.scrapa.config.ENCODING)
         try:
             try_encoding = self._get_encoding()
@@ -52,18 +66,53 @@ class ScrapaClientResponse(ClientResponse):
         return text
 
     @asyncio.coroutine
-    def json(self, *args, **kwargs):
-        text = yield from self.text(*args, **kwargs)
-        return json.loads(text)
+    def get_json(self, *args, **kwargs):
+        text = yield from self.get_text(*args, **kwargs)
+        return self._get_json(text, **kwargs)
+
+    def json(self, encoding=None, **kwargs):
+        text = self.text(encoding)
+        return self._get_json(text, **kwargs)
+
+    def _get_json(self, text, loads=json_loads):
+        return loads(text)
 
     @asyncio.coroutine
-    def dom(self, *args, **kwargs):
-        text = yield from self.text(*args, **kwargs)
-        return html.fromstring(text.encode('utf-8'))
+    def get_dom(self, *args, **kwargs):
+        text = yield from self.get_text(*args, **kwargs)
+        return self._get_dom(text)
+
+    def _get_dom(self, text):
+        return html.fromstring(text.encode('utf-8'), parser=html_parser)
+
+    def text(self, encoding=None):
+        if self._content is None:
+            raise Exception('Response not read, need to use yield from get_* instead!')
+
+        if encoding is None:
+            encoding = self._get_encoding()
+
+        return self._content.decode(encoding)
+
+    def dom(self, encoding=None):
+        return self._get_dom(self.text(encoding=encoding))
+
+    def xpath(self, xpath):
+        return self.dom().xpath(xpath)
+
+    def cssselect(self, selector):
+        return self.dom().cssselect(selector)
+
+    def show_in_browser(self):
+        show_in_browser(self.text())
 
 
 class CachedResponse(ScrapaClientResponse):
-    def __init__(self, url, content):
+    def __init__(self, scrapa, url, content):
+        self.scrapa = scrapa
         self.url = url
         self._content = content
         self.status = 200
+
+    def _get_encoding(self):
+        return 'utf-8'
