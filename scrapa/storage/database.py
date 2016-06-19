@@ -148,7 +148,7 @@ class DatabaseStorage(BaseStorage):
     def store_result(self, scraper_name, result_id, kind, result):
         params = dict(scraper_name=scraper_name, kind=kind, result_id=result_id)
         result_obj = self.session.query(Result).filter_by(**params).first()
-        result = True
+        has_result = True
         if result_obj:
             result_value = json_loads(result_obj.result)
             if isinstance(result_value, dict):
@@ -156,12 +156,12 @@ class DatabaseStorage(BaseStorage):
             else:
                 result_value = result
             self.session.query(Result).filter_by(id=result_obj.id).update({'result': json_dumps(result_value)})
-            result = False
+            has_result = False
         else:
             params.update({'result': json_dumps(result)})
             self.session.add(Result(**params))
         self.session.commit()
-        return result
+        return has_result
 
     @asyncio.coroutine
     def get_cached_content(self, cache_id):

@@ -228,7 +228,7 @@ class AsyncPostgresStorage(BaseStorage):
                 )
             )
             if result.rowcount > 0:
-                return list(result)[0].content
+                return list(result)[0].content.tobytes()
             return None
 
     @asyncio.coroutine
