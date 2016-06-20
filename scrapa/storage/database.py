@@ -1,4 +1,3 @@
-import asyncio
 from datetime import datetime
 
 from sqlalchemy.ext.declarative import declarative_base
@@ -72,15 +71,13 @@ class DatabaseStorage(BaseStorage):
     def __init__(self, db_url='sqlite:///:memory:'):
         self.db_url = db_url
 
-    @asyncio.coroutine
-    def create(self):
+    async def create(self):
         self.engine = create_engine(self.db_url, echo=False)
         Base.metadata.create_all(self.engine)
         Session = sessionmaker(bind=self.engine)
         self.session = Session()
 
-    @asyncio.coroutine
-    def store_task(self, scraper_name, coro, args, kwargs):
+    async def store_task(self, scraper_name, coro, args, kwargs):
         task_id = self.get_task_id(coro, args, kwargs)
         task_obj = self.session.query(Task
                 ).filter_by(scraper_name=scraper_name, task_id=task_id).first()
@@ -103,22 +100,18 @@ class DatabaseStorage(BaseStorage):
             return True
         return False
 
-    @asyncio.coroutine
-    def clear_tasks(self, scraper_name):
+    async def clear_tasks(self, scraper_name):
         self.session.query(Task).filter_by(scraper_name=scraper_name).delete()
 
-    @asyncio.coroutine
-    def get_task_count(self, scraper_name):
+    async def get_task_count(self, scraper_name):
         return self.session.query(Task).filter_by(
                 scraper_name=scraper_name).count()
 
-    @asyncio.coroutine
-    def get_pending_task_count(self, scraper_name):
+    async def get_pending_task_count(self, scraper_name):
         return self.session.query(Task).filter_by(
                 scraper_name=scraper_name, done=False).count()
 
-    @asyncio.coroutine
-    def get_pending_tasks(self, scraper_name):
+    async def get_pending_tasks(self, scraper_name):
         result = self.session.query(Task).filter_by(scraper_name=scraper_name, done=False)
         return GW({
             'task_name': task.name,
@@ -127,8 +120,7 @@ class DatabaseStorage(BaseStorage):
             'meta': {'tried': task.tried}
         } for task in result)
 
-    @asyncio.coroutine
-    def store_task_result(self, scraper_name, coro, args, kwargs, done, failed,
+    async def store_task_result(self, scraper_name, coro, args, kwargs, done, failed,
                           value, exception):
         task_id = self.get_task_id(coro, args, kwargs)
         (self.session.query(Task)
@@ -138,14 +130,12 @@ class DatabaseStorage(BaseStorage):
                             'exception': exception, 'tried': Task.tried + 1}))
         self.session.commit()
 
-    @asyncio.coroutine
-    def has_result(self, scraper_name, result_id, kind):
+    async def has_result(self, scraper_name, result_id, kind):
         params = dict(scraper_name=scraper_name, kind=kind, result_id=result_id)
         result_obj = self.session.query(Result).filter_by(**params).first()
         return bool(result_obj)
 
-    @asyncio.coroutine
-    def store_result(self, scraper_name, result_id, kind, result):
+    async def store_result(self, scraper_name, result_id, kind, result):
         params = dict(scraper_name=scraper_name, kind=kind, result_id=result_id)
         result_obj = self.session.query(Result).filter_by(**params).first()
         has_result = True
@@ -163,20 +153,17 @@ class DatabaseStorage(BaseStorage):
         self.session.commit()
         return has_result
 
-    @asyncio.coroutine
-    def get_cached_content(self, cache_id):
+    async def get_cached_content(self, cache_id):
         cached = self.session.query(Cache).filter_by(cache_id=cache_id).first()
         if cached:
             return cached.content
         return None
 
-    @asyncio.coroutine
-    def set_cached_content(self, cache_id, url, content):
+    async def set_cached_content(self, cache_id, url, content):
         self.session.add(Cache(cache_id=cache_id, url=url,
                                content=content,
                                created=datetime.now()))
         self.session.commit()
 
-    @asyncio.coroutine
-    def clear_cache(self):
+    async def clear_cache(self):
         self.session.query(Cache).delete()

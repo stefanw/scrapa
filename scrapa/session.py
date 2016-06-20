@@ -1,6 +1,3 @@
-import asyncio
-
-
 class SessionWrapper():
     def __init__(self, scraper, session):
         self.scraper = scraper
@@ -9,19 +6,15 @@ class SessionWrapper():
     def __getattr__(self, name):
         return getattr(self.session, name)
 
-    @asyncio.coroutine
-    def _run(self, name, *args, **kwargs):
+    async def _run(self, name, *args, **kwargs):
         kwargs['session'] = self.session
-        return (yield from getattr(self.scraper, name)(*args, **kwargs))
+        return await getattr(self.scraper, name)(*args, **kwargs)
 
-    @asyncio.coroutine
-    def get(self, *args, **kwargs):
-        return (yield from self._run('get', *args, **kwargs))
+    async def get(self, *args, **kwargs):
+        return await self._run('get', *args, **kwargs)
 
-    @asyncio.coroutine
-    def post(self, *args, **kwargs):
-        return (yield from self._run('post', *args, **kwargs))
+    async def post(self, *args, **kwargs):
+        return await self._run('post', *args, **kwargs)
 
-    @asyncio.coroutine
-    def request(self, *args, **kwargs):
-        return (yield from self._run('request', *args, **kwargs))
+    async def request(self, *args, **kwargs):
+        return await self._run('request', *args, **kwargs)

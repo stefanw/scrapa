@@ -1,4 +1,3 @@
-import asyncio
 from datetime import datetime
 
 from aiopg.sa import create_engine
@@ -55,17 +54,16 @@ class AsyncPostgresStorage(BaseStorage):
     def __init__(self, **kwargs):
         self.kwargs = kwargs
 
-    @asyncio.coroutine
-    def create(self):
+    async def create(self):
         schema_name = self.kwargs.pop('schema_name', 'public')
-        self.engine = yield from create_engine(**self.kwargs)
-        with (yield from self.engine) as conn:
+        self.engine = await create_engine(**self.kwargs)
+        async with self.engine.acquire() as conn:
             tables = ((task_table, task_index),
                       (cache_table, cache_index),
                       (result_table, result_index)
             )
             for table, index in tables:
-                exists = yield from conn.scalar('''SELECT EXISTS (
+                exists = await conn.scalar('''SELECT EXISTS (
                    SELECT 1
                    FROM   information_schema.tables
                    WHERE  table_schema = '{table_schema}'
@@ -73,21 +71,20 @@ class AsyncPostgresStorage(BaseStorage):
                 );'''.format(table_schema=schema_name,
                              table_name=table.name))
                 if not exists:
-                    tr = yield from conn.begin()
+                    tr = await conn.begin()
                     create_statement = str(CreateTable(table).compile(self.engine))
                     create_statement = create_statement.replace('CREATE TABLE',
                             'CREATE TABLE IF NOT EXISTS')
-                    yield from conn.execute(create_statement)
+                    await conn.execute(create_statement)
                     create_index = str(CreateIndex(index).compile(self.engine))
-                    yield from conn.execute(create_index)
-                    yield from tr.commit()
+                    await conn.execute(create_index)
+                    await tr.commit()
 
-    @asyncio.coroutine
-    def store_task(self, scraper_name, coro, args, kwargs):
+    async def store_task(self, scraper_name, coro, args, kwargs):
         task_id = self.get_task_id(coro, args, kwargs)
         try:
-            with (yield from self.engine) as conn:
-                yield from conn.execute(task_table.insert().values(
+            async with self.engine.acquire() as conn:
+                await conn.execute(task_table.insert().values(
                     scraper_name=scraper_name,
                     task_id=task_id,
                     name=coro.__name__,
@@ -105,29 +102,26 @@ class AsyncPostgresStorage(BaseStorage):
             # Task already exists
             return False
 
-    @asyncio.coroutine
-    def clear_tasks(self, scraper_name):
-        with (yield from self.engine) as conn:
-            yield from conn.execute(
+    async def clear_tasks(self, scraper_name):
+        async with self.engine.acquire() as conn:
+            await conn.execute(
                 task_table.delete(sa.and_(
                     task_table.c.scraper_name == scraper_name,
                 ))
             )
 
-    @asyncio.coroutine
-    def get_task_count(self, scraper_name):
-        with (yield from self.engine) as conn:
-            count = yield from conn.scalar(
+    async def get_task_count(self, scraper_name):
+        async with self.engine.acquire() as conn:
+            count = await conn.scalar(
                 task_table.count(sa.and_(
                     task_table.c.scraper_name == scraper_name,
                 ))
             )
         return count
 
-    @asyncio.coroutine
-    def get_pending_task_count(self, scraper_name):
-        with (yield from self.engine) as conn:
-            count = yield from conn.scalar(
+    async def get_pending_task_count(self, scraper_name):
+        async with self.engine.acquire() as conn:
+            count = await conn.scalar(
                 task_table.count(sa.and_(
                     task_table.c.scraper_name == scraper_name,
                     task_table.c.done == False  # noqa
@@ -135,10 +129,9 @@ class AsyncPostgresStorage(BaseStorage):
             )
         return count
 
-    @asyncio.coroutine
-    def get_pending_tasks(self, scraper_name):
-        with (yield from self.engine) as conn:
-            result = yield from conn.execute(
+    async def get_pending_tasks(self, scraper_name):
+        async with self.engine.acquire() as conn:
+            result = await conn.execute(
                 task_table.select().where(
                     sa.and_(
                         task_table.c.scraper_name == scraper_name,
@@ -153,12 +146,11 @@ class AsyncPostgresStorage(BaseStorage):
             'meta': {'tried': task.tried}
         } for task in result)
 
-    @asyncio.coroutine
-    def store_task_result(self, scraper_name, coro, args, kwargs, done, failed,
+    async def store_task_result(self, scraper_name, coro, args, kwargs, done, failed,
                           value, exception):
         task_id = self.get_task_id(coro, args, kwargs)
-        with (yield from self.engine) as conn:
-            yield from conn.execute(
+        async with self.engine.acquire() as conn:
+            await conn.execute(
                 task_table.update().where(
                     sa.and_(
                         task_table.c.scraper_name == scraper_name,
@@ -169,30 +161,28 @@ class AsyncPostgresStorage(BaseStorage):
                         'exception': exception, 'tried': task_table.c.tried + 1})
             )
 
-    @asyncio.coroutine
-    def has_result(self, scraper_name, result_id, kind):
+    async def has_result(self, scraper_name, result_id, kind):
         query = sa.and_(
             result_table.c.scraper_name == scraper_name,
             result_table.c.kind == kind,
             result_table.c.result_id == result_id
         )
-        with (yield from self.engine) as conn:
-            result_obj = yield from conn.execute(
+        async with self.engine.acquire() as conn:
+            result_obj = await conn.execute(
                 result_table.select().where(
                     query
                 )
             )
             return result_obj.rowcount > 0
 
-    @asyncio.coroutine
-    def store_result(self, scraper_name, result_id, kind, result):
+    async def store_result(self, scraper_name, result_id, kind, result):
         query = sa.and_(
             result_table.c.scraper_name == scraper_name,
             result_table.c.kind == kind,
             result_table.c.result_id == result_id
         )
-        with (yield from self.engine) as conn:
-            result_obj = yield from conn.execute(
+        async with self.engine.acquire() as conn:
+            result_obj = await conn.execute(
                 result_table.select().where(
                     query
                 )
@@ -204,14 +194,14 @@ class AsyncPostgresStorage(BaseStorage):
                     result_value.update(result)
                 else:
                     result_value = result
-                yield from conn.execute(
+                await conn.execute(
                     result_table.update().where(
                         query
                     ).values(result=json_dumps(result_value))
                 )
                 return False
             else:
-                yield from conn.execute(result_table.insert().values(
+                await conn.execute(result_table.insert().values(
                     scraper_name=scraper_name,
                     kind=kind,
                     result_id=result_id,
@@ -219,10 +209,9 @@ class AsyncPostgresStorage(BaseStorage):
                 ))
                 return True
 
-    @asyncio.coroutine
-    def get_cached_content(self, cache_id):
-        with (yield from self.engine) as conn:
-            result = yield from conn.execute(
+    async def get_cached_content(self, cache_id):
+        async with self.engine.acquire() as conn:
+            result = await conn.execute(
                 cache_table.select().where(
                     cache_table.c.cache_id == cache_id
                 )
@@ -231,19 +220,17 @@ class AsyncPostgresStorage(BaseStorage):
                 return list(result)[0].content.tobytes()
             return None
 
-    @asyncio.coroutine
-    def set_cached_content(self, cache_id, url, content):
-        with (yield from self.engine) as conn:
-            yield from conn.execute(cache_table.insert().values(
+    async def set_cached_content(self, cache_id, url, content):
+        async with self.engine.acquire() as conn:
+            await conn.execute(cache_table.insert().values(
                 cache_id=cache_id,
                 url=url,
                 created=datetime.now(),
                 content=content
             ))
 
-    @asyncio.coroutine
-    def clear_cache(self):
-        with (yield from self.engine) as conn:
-            yield from conn.execute(
+    async def clear_cache(self):
+        async with self.engine.acquire() as conn:
+            await conn.execute(
                 cache_table.delete()
             )

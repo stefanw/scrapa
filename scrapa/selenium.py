@@ -1,7 +1,5 @@
 import asyncio
-import base64
 import functools
-import webbrowser
 
 from lxml import html
 
@@ -54,13 +52,13 @@ class SeleniumElementWrapper(object):
     def __getattr__(self, name):
         return getattr(self.el, name)
 
-    def make_async(self, name, *args, **kwargs):
+    async def make_async(self, name, *args, **kwargs):
         loop = asyncio.get_event_loop()
         future = loop.run_in_executor(None, functools.partial(
             getattr(self.el, name),
             *args, **kwargs)
         )
-        yield from future
+        await future
 
     def click(self):
         return functools.partial(self.make_async, 'click')
@@ -93,24 +91,21 @@ class SeleniumWrapper(object):
     def __getattr__(self, name):
         return conditional_element_wrapper(getattr(self.driver, name), self.driver)
 
-    @asyncio.coroutine
-    def async_driver(self, driver_func_name, *args, **kwargs):
+    async def async_driver(self, driver_func_name, *args, **kwargs):
         loop = asyncio.get_event_loop()
         future = loop.run_in_executor(None, functools.partial(
                 getattr(self.driver, driver_func_name), *args, **kwargs))
-        yield from future
+        await future
 
-    @asyncio.coroutine
-    def get(self, *args, **kwargs):
-        yield from self.async_driver('get', *args, **kwargs)
+    async def get(self, *args, **kwargs):
+        await self.async_driver('get', *args, **kwargs)
         return SeleniumResponse(self.driver.page_source)
 
-    @asyncio.coroutine
-    def wait(self, condition_func, wait=5):
+    async def wait(self, condition_func, wait=5):
         loop = asyncio.get_event_loop()
         future = loop.run_in_executor(None, lambda: WebDriverWait(self.driver,
                 wait).until(condition_func))
-        yield from future
+        await future
 
     def show_in_browser(self):
         show_in_browser(self.text())

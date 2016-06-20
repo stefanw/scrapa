@@ -1,6 +1,8 @@
+import asyncio
 import os
 
 from .storage import DatabaseStorage
+from .logger import make_logger
 
 
 def get_default_storage(obj):
@@ -44,6 +46,34 @@ class ScrapaConfig:
     DEFAULT_USER_AGENT = 'Scrapa'
     LOGLEVEL = 'INFO'
     PROXY = None
+    DEBUG_EXCEPTIONS = False
     ENCODING = 'utf-8'
     STORAGE = CallableDefaultValue(get_default_storage)
     NAME = CallableDefaultValue(lambda x: x.__class__.__name__)
+
+
+class ConfigurationMixin():
+    def init_configuration(self, config):
+        proper_config = {}
+        for key in (k for k in dir(ScrapaConfig) if not k.startswith('_')):
+            val = config.get(key.lower(),
+                             self.config_kwargs.get(key.lower(),
+                             getattr(self, key, getattr(ScrapaConfig, key)))
+            )
+            if isinstance(val, DefaultValue):
+                val = val.get(self)
+            proper_config[key] = val
+
+        self.config = type('CustomScrapaConfig', (ScrapaConfig,), proper_config)
+
+        self.stopping = False
+        self.consumer_count = 0
+        self.tasks_running = 0
+        self.timeout_count = 0
+        self.storage = None
+        self.logger = make_logger(self.config.NAME, level=self.config.LOGLEVEL)
+
+        self.queue = asyncio.Queue(self.config.QUEUE_SIZE)
+        self.http_semaphore = asyncio.Semaphore(self.config.HTTP_CONCURENCY_LIMIT)
+        self._session_pool = [None for _ in range(self.config.SESSION_POOL_SIZE)]
+        self._session_query_count = 0

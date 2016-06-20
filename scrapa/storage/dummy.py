@@ -1,54 +1,40 @@
-import asyncio
-
 from .base import BaseStorage
 
 
 class DummyStorage(BaseStorage):
-    @asyncio.coroutine
-    def create(self):
+    async def create(self):
         pass
 
-    @asyncio.coroutine
-    def store_task(self, scraper_name, coro, args, kwargs):
+    async def store_task(self, scraper_name, coro, args, kwargs):
         return True
 
-    @asyncio.coroutine
-    def clear_tasks(self, scraper_name):
+    async def clear_tasks(self, scraper_name):
         pass
 
-    @asyncio.coroutine
-    def get_task_count(self, scraper_name):
+    async def get_task_count(self, scraper_name):
         return 0
 
-    @asyncio.coroutine
-    def get_pending_task_count(self, scraper_name):
+    async def get_pending_task_count(self, scraper_name):
         return 0
 
-    @asyncio.coroutine
-    def get_pending_tasks(self, scraper_name):
+    async def get_pending_tasks(self, scraper_name):
         return []
 
-    @asyncio.coroutine
-    def store_task_result(self, scraper_name, coro, args, kwargs, done, failed,
+    async def store_task_result(self, scraper_name, coro, args, kwargs, done, failed,
                           value, exception):
         return False
 
-    @asyncio.coroutine
-    def has_result(self, scraper_name, result_id, kind):
+    async def has_result(self, scraper_name, result_id, kind):
         return False
 
-    @asyncio.coroutine
-    def store_result(self, scraper_name, result_id, kind, result):
+    async def store_result(self, scraper_name, result_id, kind, result):
         return True
 
-    @asyncio.coroutine
-    def get_cached_content(self, cache_id):
+    async def get_cached_content(self, cache_id):
         pass
 
-    @asyncio.coroutine
-    def set_cached_content(self, cache_id, url, content):
+    async def set_cached_content(self, cache_id, url, content):
         pass
 
-    @asyncio.coroutine
-    def clear_cache(self):
+    async def clear_cache(self):
         pass

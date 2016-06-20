@@ -1,4 +1,3 @@
-import asyncio
 import hashlib
 import json
 
@@ -19,52 +18,40 @@ class BaseStorage(object):
         task_id.update(json.dumps(kwargs, sort_keys=True).encode('utf-8'))
         return task_id.hexdigest()
 
-    @asyncio.coroutine
-    def create(self):
+    async def create(self):
         raise NotImplementedError
 
-    @asyncio.coroutine
-    def store_task(self, scraper_name, coro, args, kwargs):
+    async def store_task(self, scraper_name, coro, args, kwargs):
         ''' Return True if stored, False if already stored'''
         raise NotImplementedError
 
-    @asyncio.coroutine
-    def clear_tasks(self, scraper_name):
+    async def clear_tasks(self, scraper_name):
         raise NotImplementedError
 
-    @asyncio.coroutine
-    def get_task_count(self, scraper_name):
+    async def get_task_count(self, scraper_name):
         raise NotImplementedError
 
-    @asyncio.coroutine
-    def get_pending_task_count(self, scraper_name):
+    async def get_pending_task_count(self, scraper_name):
         raise NotImplementedError
 
-    @asyncio.coroutine
-    def get_pending_tasks(self, scraper_name):
+    async def get_pending_tasks(self, scraper_name):
         raise NotImplementedError
 
-    @asyncio.coroutine
-    def store_task_result(self, scraper_name, coro, args, kwargs, done, failed,
+    async def store_task_result(self, scraper_name, coro, args, kwargs, done, failed,
                           value, exception):
         raise NotImplementedError
 
-    @asyncio.coroutine
-    def has_result(self, scraper_name, result_id, kind):
+    async def has_result(self, scraper_name, result_id, kind):
         raise NotImplementedError
 
-    @asyncio.coroutine
-    def store_result(self, scraper_name, result_id, kind, result):
+    async def store_result(self, scraper_name, result_id, kind, result):
         raise NotImplementedError
 
-    @asyncio.coroutine
-    def get_cached_content(self, cache_id):
+    async def get_cached_content(self, cache_id):
         raise NotImplementedError
 
-    @asyncio.coroutine
-    def set_cached_content(self, cache_id, url, content):
+    async def set_cached_content(self, cache_id, url, content):
         raise NotImplementedError
 
-    @asyncio.coroutine
-    def clear_cache(self):
+    async def clear_cache(self):
         raise NotImplementedError

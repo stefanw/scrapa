@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 import logging
 import sys
 
@@ -16,6 +17,41 @@ LEVEL_DICT = {
     'WARN': logging.WARN,
     'ERROR': logging.ERROR,
 }
+
+
+class LoggingMixin():
+    def get_task_id(self):
+        return id(asyncio.Task.current_task())
+
+    def log_debug(self, typ, info):
+        self.logger.debug(typ, extra={'scrapa': {
+            'scraper': self.config.NAME,
+            'task': self.get_task_id(),
+            'type': typ,
+            'time': datetime.now().isoformat(),
+            'data': info
+        }})
+
+    def log_task_start(self, info):
+        self.log_debug('task_start', info)
+
+    def log_task_end(self, info):
+        self.log_debug('task_end', info)
+
+    def log_request(self, info):
+        self.log_debug('request', info)
+
+    def log_exception(self, info):
+        self.logger.exception('exception', exc_info=True, extra={'scrapa': {
+            'scraper': self.config.NAME,
+            'task': self.get_task_id(),
+            'type': 'exception',
+            'time': datetime.now().isoformat(),
+            'data': None
+        }})
+
+    def log_progress(self, info):
+        self.log_debug('progress', info)
 
 
 def make_logger(name, level='DEBUG'):
@@ -36,11 +72,10 @@ def make_logger(name, level='DEBUG'):
     return logger
 
 
-@asyncio.coroutine
-def add_websocket_handler(logger, **kwargs):
+async def add_websocket_handler(logger, **kwargs):
     handler = WebsocketHandler(logger)
     handler.setLevel(LEVEL_DICT['DEBUG'])
-    yield from handler.make_server(logger=logger, **kwargs)
+    await handler.make_server(logger=logger, **kwargs)
     logger.addHandler(handler)
     return handler
 
@@ -86,18 +121,17 @@ class WebsocketHandler(logging.Handler):
             return self.html_formatter.format_exception(exception_info,
                 record.getMessage())
 
-    @asyncio.coroutine
-    def websocket_handler(self, request):
+    async def websocket_handler(self, request):
         ws = web.WebSocketResponse()
         ws.start(request)
 
         self.dashboard_subscribers.append(ws)
 
         while not ws.closed:
-            msg = yield from ws.receive()
+            msg = await ws.receive()
             if msg.tp == aiohttp.MsgType.text:
                 if msg.data == 'close':
-                    yield from ws.close()
+                    await ws.close()
             elif msg.tp == aiohttp.MsgType.close:
                 self.logger.debug('websocket connection closed')
             elif msg.tp == aiohttp.MsgType.error:
@@ -107,8 +141,7 @@ class WebsocketHandler(logging.Handler):
         self.dashboard_subscribers.remove(ws)
         return ws
 
-    @asyncio.coroutine
-    def make_server(self, logger=None, host='127.0.0.1', port='5494', loop=None):
+    async def make_server(self, logger=None, host='127.0.0.1', port='5494', loop=None):
         from .dashboard import index, static
 
         if loop is None:
@@ -119,13 +152,12 @@ class WebsocketHandler(logging.Handler):
         self.web_app.router.add_route('GET', '/ws', self.websocket_handler)
         self.web_app.router.add_route('GET', r'/static/{path:.+}', static)
         self.web_handler = self.web_app.make_handler()
-        self.web_server = yield from loop.create_server(
+        self.web_server = await loop.create_server(
             self.web_handler, host, port)
         logger.info('Serving on http://%s:%s' % self.web_server.sockets[0].getsockname())
 
-    @asyncio.coroutine
-    def close_server(self):
-        yield from self.web_handler.finish_connections(1.0)
+    async def close_server(self):
+        await self.web_handler.finish_connections(1.0)
         self.web_server.close()
-        yield from self.web_server.wait_closed()
-        yield from self.web_app.finish()
+        await self.web_server.wait_closed()
+        await self.web_app.finish()
