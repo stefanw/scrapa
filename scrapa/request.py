@@ -28,7 +28,8 @@ class ScrapaClientRequest(ClientRequest):
         )
         if self.body:
             for part in self.body:
-                curl += " --data '{body}'".format(body=part.decode('utf-8'))
+                if part:
+                    curl += " --data '{body}'".format(body=part.decode('utf-8'))
         return curl
 
     def __str__(self):
