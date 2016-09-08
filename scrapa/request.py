@@ -161,6 +161,11 @@ class RequestMixin():
             session._use_count = 0
         return session
 
+    def ensure_good_session(self, session):
+        if session is None or session.closed:
+            return self.get_session_from_pool()
+        return session
+
     @contextmanager
     def use_request_session(self, session=None):
         current_session = session or self.get_session_from_pool()
@@ -169,7 +174,7 @@ class RequestMixin():
             current_session = current_session.session
 
         try:
-            yield current_session
+            yield self.ensure_good_session(current_session)
         finally:
             self._session_query_count += 1
             if not hasattr(current_session, '_use_count'):
