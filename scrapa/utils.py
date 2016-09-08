@@ -122,8 +122,9 @@ def doublewrap(f):
     return new_dec
 
 
-def mark_store(f):
+def mark_store(f, exclude=None):
     f.store = True
+    f.store_exclude = exclude
 
 
 @doublewrap
@@ -134,8 +135,8 @@ def async(f, store=False):
 
 
 @doublewrap
-def store(f):
-    mark_store(f)
+def store(f, exclude=()):
+    mark_store(f, exclude=exclude)
     return asyncio.coroutine(f)
 
 

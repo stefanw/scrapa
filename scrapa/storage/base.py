@@ -15,14 +15,15 @@ class BaseStorage(object):
         task_id = hashlib.md5()
         task_id.update(coro.__name__.encode('utf-8'))
         task_id.update(json.dumps(args, sort_keys=True).encode('utf-8'))
-        task_id.update(json.dumps(kwargs, sort_keys=True).encode('utf-8'))
+        dump_kwargs = {k: v for k, v in kwargs.items() if k not in coro.store_exclude}
+        task_id.update(json.dumps(dump_kwargs, sort_keys=True).encode('utf-8'))
         return task_id.hexdigest()
 
     async def create(self):
         raise NotImplementedError
 
     async def store_task(self, scraper_name, coro, args, kwargs):
-        ''' Return True if stored, False if already stored'''
+        """Return True if stored, False if already stored."""
         raise NotImplementedError
 
     async def clear_tasks(self, scraper_name):
