@@ -57,10 +57,9 @@ class RequestMixin():
                     b64_data = None
                     try:
                         start_time = datetime.utcnow()
-                        # response = await asyncio.wait_for(
-                        #     session.request(method, url, **kwargs),
-                        #     self.config.CONNECT_TIMEOUT)
-                        response = await session.request(method, url, **kwargs)
+                        response = await asyncio.wait_for(
+                            session.request(method, url, **kwargs),
+                            self.config.CONNECT_TIMEOUT)
                         response.scrapa = self
                         if not status_only:
                             b64_data = await response.read()
