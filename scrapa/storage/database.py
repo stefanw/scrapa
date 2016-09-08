@@ -131,9 +131,19 @@ class DatabaseStorage(BaseStorage):
         self.session.commit()
 
     async def has_result(self, scraper_name, result_id, kind):
+        result_obj = self._get_result(scraper_name, result_id, kind)
+        return bool(result_obj)
+
+    async def get_result(self, scraper_name, result_id, kind):
+        result_obj = self._get_result(scraper_name, result_id, kind)
+        if result_obj is None:
+            return None
+        return json_loads(result_obj.result)
+
+    def _get_result(self, scraper_name, result_id, kind):
         params = dict(scraper_name=scraper_name, kind=kind, result_id=result_id)
         result_obj = self.session.query(Result).filter_by(**params).first()
-        return bool(result_obj)
+        return result_obj
 
     async def store_result(self, scraper_name, result_id, kind, result):
         params = dict(scraper_name=scraper_name, kind=kind, result_id=result_id)

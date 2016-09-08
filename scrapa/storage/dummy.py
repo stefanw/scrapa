@@ -27,6 +27,9 @@ class DummyStorage(BaseStorage):
     async def has_result(self, scraper_name, result_id, kind):
         return False
 
+    async def get_result(self, scraper_name, result_id, kind):
+        raise ValueError
+
     async def store_result(self, scraper_name, result_id, kind, result):
         return True
 

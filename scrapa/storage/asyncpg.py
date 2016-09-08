@@ -53,16 +53,16 @@ cache_index = sa.Index('scrapa_cache__cache_id', cache_table.c.cache_id, unique=
 class AsyncPostgresStorage(BaseStorage):
     def __init__(self, **kwargs):
         self.kwargs = kwargs
+        self.tables = [(task_table, task_index),
+                  (cache_table, cache_index),
+                  (result_table, result_index)
+        ]
 
     async def create(self):
         schema_name = self.kwargs.pop('schema_name', 'public')
         self.engine = await create_engine(**self.kwargs)
         async with self.engine.acquire() as conn:
-            tables = ((task_table, task_index),
-                      (cache_table, cache_index),
-                      (result_table, result_index)
-            )
-            for table, index in tables:
+            for table, index in self.tables:
                 exists = await conn.scalar('''SELECT EXISTS (
                    SELECT 1
                    FROM   information_schema.tables
@@ -76,8 +76,9 @@ class AsyncPostgresStorage(BaseStorage):
                     create_statement = create_statement.replace('CREATE TABLE',
                             'CREATE TABLE IF NOT EXISTS')
                     await conn.execute(create_statement)
-                    create_index = str(CreateIndex(index).compile(self.engine))
-                    await conn.execute(create_index)
+                    if index is not None:
+                        create_index = str(CreateIndex(index).compile(self.engine))
+                        await conn.execute(create_index)
                     await tr.commit()
 
     async def store_task(self, scraper_name, coro, args, kwargs):
@@ -162,6 +163,14 @@ class AsyncPostgresStorage(BaseStorage):
             )
 
     async def has_result(self, scraper_name, result_id, kind):
+        result_obj = await self._get_result(scraper_name, result_id, kind)
+        return result_obj.rowcount > 0
+
+    async def get_result(self, scraper_name, result_id, kind):
+        result_obj = await self._get_result(scraper_name, result_id, kind)
+        return json_loads(list(result_obj)[0].result)
+
+    async def _get_result(self, scraper_name, result_id, kind):
         query = sa.and_(
             result_table.c.scraper_name == scraper_name,
             result_table.c.kind == kind,
@@ -173,7 +182,7 @@ class AsyncPostgresStorage(BaseStorage):
                     query
                 )
             )
-            return result_obj.rowcount > 0
+            return result_obj
 
     async def store_result(self, scraper_name, result_id, kind, result):
         query = sa.and_(

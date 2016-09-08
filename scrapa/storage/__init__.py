@@ -34,7 +34,11 @@ class StorageMixin():
 
     async def has_result(self, result_id, kind):
         storage = await self.get_storage()
-        await storage.has_result(self.config.NAME, result_id, kind)
+        return await storage.has_result(self.config.NAME, result_id, kind)
+
+    async def get_result(self, result_id, kind):
+        storage = await self.get_storage()
+        return await storage.get_result(self.config.NAME, result_id, kind)
 
     async def store_result(self, result_id, kind, result):
         storage = await self.get_storage()
