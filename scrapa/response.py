@@ -25,6 +25,7 @@ class ScrapaClientResponse(ClientResponse):
         return helpers.parse_mimetype(ctype)
 
     async def get_text(self, *args, **kwargs):
+        # FIXME: Change Priorities here
         encoding = kwargs.pop('encoding', self.scrapa.config.ENCODING)
         try:
             try_encoding = self._get_encoding()
@@ -55,17 +56,17 @@ class ScrapaClientResponse(ClientResponse):
     def _get_dom(self, text):
         return html.fromstring(text.encode('utf-8'), parser=html_parser)
 
-    def text(self, encoding=None):
+    def text(self, encoding=None, errors='ignore'):
         if self._content is None:
             raise Exception('Response not read, need to use await get_* instead!')
 
         if encoding is None:
             encoding = self._get_encoding()
 
-        return self._content.decode(encoding)
+        return self._content.decode(encoding, errors)
 
-    def dom(self, encoding=None):
-        return self._get_dom(self.text(encoding=encoding))
+    def dom(self, encoding=None, errors='strict'):
+        return self._get_dom(self.text(encoding=encoding, errors=errors))
 
     def xpath(self, xpath):
         return self.dom().xpath(xpath)
