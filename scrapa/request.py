@@ -57,9 +57,10 @@ class RequestMixin():
                     b64_data = None
                     try:
                         start_time = datetime.utcnow()
-                        response = await asyncio.wait_for(
-                            session.request(method, url, **kwargs),
-                            self.config.CONNECT_TIMEOUT)
+                        # response = await asyncio.wait_for(
+                        #     session.request(method, url, **kwargs),
+                        #     self.config.CONNECT_TIMEOUT)
+                        response = await session.request(method, url, **kwargs)
                         response.scrapa = self
                         if not status_only:
                             b64_data = await response.read()
@@ -163,6 +164,10 @@ class RequestMixin():
     @contextmanager
     def use_request_session(self, session=None):
         current_session = session or self.get_session_from_pool()
+
+        if isinstance(current_session, SessionWrapper):
+            current_session = current_session.session
+
         try:
             yield current_session
         finally:
